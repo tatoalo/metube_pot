@@ -50,22 +50,6 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ steps.date.outputs.date }}
 
-  dockerhub-sync-readme:
-    needs: dockerhub-build-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Sync README
-        uses: docker://lsiodev/readme-sync:latest
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
-          GIT_REPOSITORY: ${{ github.repository }}
-          DOCKER_REPOSITORY: ${{ secrets.DOCKERHUB_REPOSITORY }}
-          GIT_BRANCH: master
-        with:
-          entrypoint: node
-          args: /opt/docker-readme-sync/sync
-
   create-release:
     needs: dockerhub-build-push
     runs-on: ubuntu-latest
