@@ -4,6 +4,22 @@ on:
   push:
     branches:
       - 'master'
+    paths:
+      # Backend
+      - 'app/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      # Frontend
+      - 'ui/**'
+      # Docker
+      - 'Dockerfile'
+      - 'docker-entrypoint.sh'
+      - '.dockerignore'
+      # Exclude paths that shouldn't trigger builds
+      - '!**/*.md'
+      - '!.github/**'
+      - '!.vscode/**'
+      - '!LICENSE'
 
 jobs:
   dockerhub-build-push:
@@ -12,7 +28,7 @@ jobs:
       -
         name: Get current date
         id: date
-        run: echo "::set-output name=date::$(date +'%Y.%m.%d')"
+        run: echo "date=$(date +'%Y.%m.%d')" >> $GITHUB_OUTPUT
       -
         name: Checkout
         uses: actions/checkout@v6
