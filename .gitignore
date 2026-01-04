@@ -1,3 +1,7 @@
+Makefile
+ytdl_options.json
+docker-compose.yml
+
 # compiled output
 /ui/dist
 /ui/tmp
