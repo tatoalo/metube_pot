@@ -1,0 +1,380 @@
+name: upstream-sync-check
+
+on:
+  schedule:
+    - cron: "0 3 * * 6" # Every Saturday at 3:00 AM UTC
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  analyze-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get latest upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+        run: |
+          echo "Fetching latest release from alexta69/metube..."
+
+          RELEASE_INFO=$(gh api repos/alexta69/metube/releases/latest)
+
+          TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+          PUBLISHED=$(echo "$RELEASE_INFO" | jq -r '.published_at')
+          URL=$(echo "$RELEASE_INFO" | jq -r '.html_url')
+          NOTES=$(echo "$RELEASE_INFO" | jq -r '.body // "No release notes available."')
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "published=$PUBLISHED" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+          # Save release notes to file (handles multiline)
+          echo "$NOTES" > /tmp/release_notes.txt
+
+          echo "Latest upstream release: $TAG (published: $PUBLISHED)"
+
+      - name: Check if already analyzed
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Checking if release $RELEASE_TAG was already analyzed..."
+
+          # Search for existing issue with this release tag in title
+          EXISTING=$(gh issue list \
+            --search "Upstream Sync Analysis: $RELEASE_TAG in:title" \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "Already analyzed in issue #$EXISTING, skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "existing_issue=$EXISTING" >> $GITHUB_OUTPUT
+          else
+            echo "No existing analysis found, proceeding."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup labels
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+        run: |
+          # Create labels if they don't exist
+          gh label create "upstream-sync" \
+            --description "Automated upstream sync analysis" \
+            --color "0366d6" 2>/dev/null || true
+
+          gh label create "automated" \
+            --description "Automatically generated" \
+            --color "6f42c1" 2>/dev/null || true
+
+      - name: Add upstream remote and fetch
+        if: steps.check.outputs.skip != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Adding upstream remote..."
+          git remote add upstream https://github.com/alexta69/metube.git
+
+          echo "Fetching upstream tags..."
+          git fetch upstream --tags
+
+          echo "Verifying tag $RELEASE_TAG exists..."
+          git rev-parse "$RELEASE_TAG" || {
+            echo "Error: Tag $RELEASE_TAG not found"
+            exit 1
+          }
+
+      - name: Generate diff
+        if: steps.check.outputs.skip != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Generating diff statistics..."
+
+          # Get diff stat (compact summary)
+          git diff HEAD...$RELEASE_TAG --stat > /tmp/diff_stat.txt
+
+          # Get full diff (truncated to ~50KB for LLM context)
+          git diff HEAD...$RELEASE_TAG | head -c 50000 > /tmp/diff_full.txt
+
+          # Check if diff was truncated
+          FULL_SIZE=$(git diff HEAD...$RELEASE_TAG | wc -c)
+          if [ "$FULL_SIZE" -gt 50000 ]; then
+            echo -e "\n\n... [DIFF TRUNCATED - original size: $FULL_SIZE bytes] ..." >> /tmp/diff_full.txt
+          fi
+
+          # Get list of changed files
+          git diff HEAD...$RELEASE_TAG --name-only > /tmp/changed_files.txt
+
+          echo "Diff generated. Files changed:"
+          cat /tmp/diff_stat.txt
+
+      - name: Call OpenRouter for analysis
+        if: steps.check.outputs.skip != 'true'
+        id: llm
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          RELEASE_URL: ${{ steps.upstream.outputs.url }}
+          RELEASE_PUBLISHED: ${{ steps.upstream.outputs.published }}
+        run: |
+          # Read generated files
+          RELEASE_NOTES=$(cat /tmp/release_notes.txt)
+          DIFF_STAT=$(cat /tmp/diff_stat.txt)
+          DIFF_FULL=$(cat /tmp/diff_full.txt)
+          CHANGED_FILES=$(cat /tmp/changed_files.txt)
+          TODAY=$(date +'%Y-%m-%d')
+
+          # Construct the prompt
+          PROMPT=$(cat <<'PROMPT_EOF'
+          You are analyzing the latest release of an upstream repository to help me (a fork maintainer) decide whether to merge the changes.
+
+          ## Context
+          - **Upstream Repository**: alexta69/metube (YouTube downloader web app)
+          - **Upstream Release**: RELEASE_TAG_PLACEHOLDER (published: RELEASE_PUBLISHED_PLACEHOLDER)
+          - **Release URL**: RELEASE_URL_PLACEHOLDER
+
+          ## Important Instructions
+          - Focus ONLY on what changed in the upstream release
+          - Do NOT analyze or mention the fork's custom modifications
+          - Provide actionable insights for merging decisions
+
+          ## Upstream Release Notes
+          ```
+          RELEASE_NOTES_PLACEHOLDER
+          ```
+
+          ## Changed Files
+          ```
+          CHANGED_FILES_PLACEHOLDER
+          ```
+
+          ## Diff Statistics
+          ```
+          DIFF_STAT_PLACEHOLDER
+          ```
+
+          ## Detailed Changes
+          ```diff
+          DIFF_FULL_PLACEHOLDER
+          ```
+
+          ---
+
+          Please provide your analysis in the following markdown format:
+
+          ## New Features
+          List any new features added in this upstream release. If none, state "None identified."
+
+          ## Breaking Changes
+          Identify any breaking changes that could affect downstream forks. If none, state "None identified."
+
+          ## Dependency Updates
+          List any updated dependencies and their version changes. If none, state "None identified."
+
+          ## Security Fixes
+          Highlight any security-related changes or fixes. If none, state "None identified."
+
+          ## Mergeability Score: X/10
+          Rate from 1-10 where:
+          - 1-3: Major changes, high risk of conflicts, careful review needed
+          - 4-6: Moderate changes, some review required
+          - 7-9: Minor changes, low risk
+          - 10: Trivial or no changes
+
+          Provide a brief justification for your score.
+
+          ## Recommended Actions
+          Provide 2-4 specific actionable steps for the fork maintainer.
+          PROMPT_EOF
+          )
+
+          # Replace placeholders
+          PROMPT="${PROMPT//RELEASE_TAG_PLACEHOLDER/$RELEASE_TAG}"
+          PROMPT="${PROMPT//RELEASE_PUBLISHED_PLACEHOLDER/$RELEASE_PUBLISHED}"
+          PROMPT="${PROMPT//RELEASE_URL_PLACEHOLDER/$RELEASE_URL}"
+          PROMPT="${PROMPT//RELEASE_NOTES_PLACEHOLDER/$RELEASE_NOTES}"
+          PROMPT="${PROMPT//CHANGED_FILES_PLACEHOLDER/$CHANGED_FILES}"
+          PROMPT="${PROMPT//DIFF_STAT_PLACEHOLDER/$DIFF_STAT}"
+          PROMPT="${PROMPT//DIFF_FULL_PLACEHOLDER/$DIFF_FULL}"
+
+          # Prepare JSON payload
+          PAYLOAD=$(jq -n \
+            --arg model "$OPENROUTER_MODEL" \
+            --arg prompt "$PROMPT" \
+            '{
+              model: $model,
+              messages: [
+                {
+                  role: "user",
+                  content: $prompt
+                }
+              ],
+              max_tokens: 4000
+            }')
+
+          # Retry logic
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SUCCESS=false
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = "false" ]; do
+            echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES..."
+
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST "https://openrouter.ai/api/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+              -H "HTTP-Referer: https://github.com/${{ github.repository }}" \
+              -H "X-Title: MeTube Fork Sync Analyzer" \
+              -d "$PAYLOAD")
+
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+            RESPONSE_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              SUCCESS=true
+              echo "API call successful!"
+
+              # Extract the content from the response
+              ANALYSIS=$(echo "$RESPONSE_BODY" | jq -r '.choices[0].message.content // empty')
+
+              if [ -z "$ANALYSIS" ]; then
+                echo "Error: Empty response from API"
+                SUCCESS=false
+              else
+                echo "$ANALYSIS" > /tmp/analysis.md
+              fi
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "API call failed with status $HTTP_CODE"
+              echo "Response: $RESPONSE_BODY"
+
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                SLEEP_TIME=$((RETRY_COUNT * 5))
+                echo "Retrying in $SLEEP_TIME seconds..."
+                sleep $SLEEP_TIME
+              fi
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "All retry attempts failed. Creating error report."
+            cat > /tmp/analysis.md <<EOF
+          ## Analysis Failed
+
+          The automated analysis could not be completed after $MAX_RETRIES attempts.
+
+          **Error**: API returned status code $HTTP_CODE
+
+          Please manually review the upstream release:
+          - **Release**: $RELEASE_TAG
+          - **URL**: $RELEASE_URL
+
+          ### Changed Files
+          \`\`\`
+          $(cat /tmp/changed_files.txt)
+          \`\`\`
+
+          ### Diff Statistics
+          \`\`\`
+          $(cat /tmp/diff_stat.txt)
+          \`\`\`
+          EOF
+            echo "error=true" >> $GITHUB_OUTPUT
+          else
+            echo "error=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Issue
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          RELEASE_URL: ${{ steps.upstream.outputs.url }}
+          RELEASE_PUBLISHED: ${{ steps.upstream.outputs.published }}
+          ANALYSIS_ERROR: ${{ steps.llm.outputs.error }}
+        run: |
+          TODAY=$(date +'%Y-%m-%d')
+          ANALYSIS=$(cat /tmp/analysis.md)
+
+          # Determine labels based on success/failure
+          if [ "$ANALYSIS_ERROR" = "true" ]; then
+            LABELS="upstream-sync,automated,needs-attention"
+            # Create needs-attention label if it doesn't exist
+            gh label create "needs-attention" \
+              --description "Requires manual review" \
+              --color "d93f0b" --force 2>&1 || true
+          else
+            LABELS="upstream-sync,automated"
+          fi
+
+          # Create issue body
+          cat > /tmp/issue_body.md <<EOF
+          # Upstream Sync Analysis: $RELEASE_TAG
+
+          **Analyzed**: $TODAY | **Released**: ${RELEASE_PUBLISHED:0:10}
+          [View Release]($RELEASE_URL)
+
+          ---
+
+          $ANALYSIS
+
+          ---
+
+          *This analysis was automatically generated. Please review before taking action.*
+          EOF
+
+          # Create the issue
+          ISSUE_BODY=$(cat /tmp/issue_body.md)
+
+          # Build labels array
+          IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+          LABELS_JSON=$(printf '%s\n' "${LABEL_ARRAY[@]}" | jq -R . | jq -s .)
+
+          ISSUE_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/issues" \
+            -d "$(jq -n \
+              --arg title "Upstream Sync Analysis: $RELEASE_TAG" \
+              --arg body "$ISSUE_BODY" \
+              --argjson labels "$LABELS_JSON" \
+              '{title: $title, body: $body, labels: $labels}')")
+
+          ISSUE_URL=$(echo "$ISSUE_RESPONSE" | jq -r '.html_url // empty')
+
+          if [ -z "$ISSUE_URL" ]; then
+            echo "Failed to create issue. Response:"
+            echo "$ISSUE_RESPONSE" | jq .
+            exit 1
+          fi
+
+          echo "Issue created: $ISSUE_URL"
+
+      - name: Summary
+        if: always()
+        env:
+          SKIP: ${{ steps.check.outputs.skip }}
+          EXISTING_ISSUE: ${{ steps.check.outputs.existing_issue }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "## Upstream Sync Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Upstream Release**: $RELEASE_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$SKIP" = "true" ]; then
+            echo "**Status**: Skipped (already analyzed in issue #$EXISTING_ISSUE)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status**: Analysis completed and issue created" >> $GITHUB_STEP_SUMMARY
+          fi
