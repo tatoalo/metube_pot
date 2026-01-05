@@ -19,6 +19,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Update yt-dlp
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
         run: |
           uv sync --locked
           # Check if yt-dlp has updates available
