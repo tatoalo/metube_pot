@@ -2,27 +2,23 @@ name: update-yt-dlp
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
 
 jobs:
-  update-yt-dlp :
+  update-yt-dlp:
     runs-on: ubuntu-latest
     steps:
-      -
-        name: Checkout
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ secrets.AUTOUPDATE_PAT }}
-      -
-        name: Set up Python
+          token: ${{ secrets.TATOALO_REPO_PAT }}
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
-      -
-        name: Install uv
+          python-version: "3.13"
+      - name: Install uv
         uses: astral-sh/setup-uv@v7
-      -
-        name: Update yt-dlp
+      - name: Update yt-dlp
         run: |
           uv sync --locked
           # Check if yt-dlp has updates available
