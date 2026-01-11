@@ -37,13 +37,85 @@ jobs:
 
           echo "Latest upstream release: $TAG (published: $PUBLISHED)"
 
-      - name: Check if already analyzed
+      - name: Get last synced version
+        id: sync_state
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+        run: |
+          echo "Querying last synced upstream version from issue labels..."
+
+          # Get latest synced version from closed issues with synced: label
+          LAST_SYNCED=$(gh issue list \
+            --state closed \
+            --label "upstream-sync" \
+            --json labels,closedAt,number \
+            --jq '[.[] | select(.labels[].name | startswith("synced:"))]
+                  | sort_by(.closedAt) | last
+                  | .labels[] | select(.name | startswith("synced:"))
+                  | .name | split(":")[1]' 2>/dev/null || echo "")
+
+          if [ -z "$LAST_SYNCED" ] || [ "$LAST_SYNCED" = "null" ]; then
+            echo "No previous sync found, this appears to be the first run."
+            echo "last_synced=" >> $GITHUB_OUTPUT
+            echo "has_sync_history=false" >> $GITHUB_OUTPUT
+          else
+            echo "Last synced upstream version: $LAST_SYNCED"
+            echo "last_synced=$LAST_SYNCED" >> $GITHUB_OUTPUT
+            echo "has_sync_history=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get all releases since last sync
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
+          LATEST_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Fetching all upstream releases..."
+
+          if [ -z "$LAST_SYNCED" ]; then
+            # First run - only analyze latest release
+            echo "First run, analyzing only latest release: $LATEST_TAG"
+            echo "$LATEST_TAG" > /tmp/releases_to_analyze.txt
+            echo "release_count=1" >> $GITHUB_OUTPUT
+          else
+            # Get all releases since last synced (excluding the synced one)
+            gh api repos/alexta69/metube/releases --paginate \
+              --jq "[.[] | select(.tag_name > \"$LAST_SYNCED\")] | reverse | .[].tag_name" \
+              > /tmp/releases_to_analyze.txt
+
+            RELEASE_COUNT=$(wc -l < /tmp/releases_to_analyze.txt | tr -d ' ')
+
+            if [ "$RELEASE_COUNT" -eq 0 ]; then
+              echo "No new releases since $LAST_SYNCED"
+              echo "release_count=0" >> $GITHUB_OUTPUT
+            else
+              echo "Found $RELEASE_COUNT new release(s) since $LAST_SYNCED:"
+              cat /tmp/releases_to_analyze.txt
+              echo "release_count=$RELEASE_COUNT" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+          # Save releases list for LLM context
+          echo "releases_list=$(cat /tmp/releases_to_analyze.txt | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+
+      - name: Check if analysis needed
         id: check
         env:
           GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
           RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          RELEASE_COUNT: ${{ steps.releases.outputs.release_count }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
         run: |
-          echo "Checking if release $RELEASE_TAG was already analyzed..."
+          echo "Checking if analysis is needed..."
+
+          # Skip if no new releases since last sync
+          if [ "$RELEASE_COUNT" = "0" ]; then
+            echo "Already synced to $LAST_SYNCED, no new releases to analyze."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "skip_reason=already_synced" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Search for existing issue with this release tag in title
           EXISTING=$(gh issue list \
@@ -55,8 +127,9 @@ jobs:
             echo "Already analyzed in issue #$EXISTING, skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "existing_issue=$EXISTING" >> $GITHUB_OUTPUT
+            echo "skip_reason=issue_exists" >> $GITHUB_OUTPUT
           else
-            echo "No existing analysis found, proceeding."
+            echo "Analysis needed for $RELEASE_COUNT new release(s)."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
@@ -95,25 +168,43 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         env:
           RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
+          HAS_SYNC_HISTORY: ${{ steps.sync_state.outputs.has_sync_history }}
         run: |
           echo "Generating diff statistics..."
 
-          # Get diff stat (compact summary)
-          git diff HEAD...$RELEASE_TAG --stat > /tmp/diff_stat.txt
+          # Determine diff base: upstream-to-upstream if we have sync history, otherwise fork HEAD
+          if [ "$HAS_SYNC_HISTORY" = "true" ] && [ -n "$LAST_SYNCED" ]; then
+            DIFF_BASE="$LAST_SYNCED"
+            echo "Using upstream-to-upstream diff: $LAST_SYNCED -> $RELEASE_TAG"
+          else
+            DIFF_BASE="HEAD"
+            echo "First run, using fork HEAD as diff base"
+          fi
+
+          # Primary diff: upstream changes only (what's new since last sync)
+          git diff ${DIFF_BASE}...${RELEASE_TAG} --stat > /tmp/diff_stat.txt
 
           # Get full diff (truncated to ~50KB for LLM context)
-          git diff HEAD...$RELEASE_TAG | head -c 50000 > /tmp/diff_full.txt
+          git diff ${DIFF_BASE}...${RELEASE_TAG} | head -c 50000 > /tmp/diff_full.txt
 
           # Check if diff was truncated
-          FULL_SIZE=$(git diff HEAD...$RELEASE_TAG | wc -c)
+          FULL_SIZE=$(git diff ${DIFF_BASE}...${RELEASE_TAG} | wc -c)
           if [ "$FULL_SIZE" -gt 50000 ]; then
             echo -e "\n\n... [DIFF TRUNCATED - original size: $FULL_SIZE bytes] ..." >> /tmp/diff_full.txt
           fi
 
           # Get list of changed files
-          git diff HEAD...$RELEASE_TAG --name-only > /tmp/changed_files.txt
+          git diff ${DIFF_BASE}...${RELEASE_TAG} --name-only > /tmp/changed_files.txt
 
-          echo "Diff generated. Files changed:"
+          # Secondary: fork gap context (for reference only)
+          if [ "$HAS_SYNC_HISTORY" = "true" ]; then
+            echo "" >> /tmp/diff_stat.txt
+            echo "--- Fork Gap (HEAD vs latest upstream) ---" >> /tmp/diff_stat.txt
+            git diff HEAD...${RELEASE_TAG} --stat >> /tmp/diff_stat.txt 2>/dev/null || true
+          fi
+
+          echo "Diff generated. Files changed in upstream:"
           cat /tmp/diff_stat.txt
 
       - name: Call OpenRouter for analysis
@@ -125,6 +216,10 @@ jobs:
           RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
           RELEASE_URL: ${{ steps.upstream.outputs.url }}
           RELEASE_PUBLISHED: ${{ steps.upstream.outputs.published }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
+          HAS_SYNC_HISTORY: ${{ steps.sync_state.outputs.has_sync_history }}
+          RELEASES_LIST: ${{ steps.releases.outputs.releases_list }}
+          RELEASE_COUNT: ${{ steps.releases.outputs.release_count }}
         run: |
           # Read generated files
           RELEASE_NOTES=$(cat /tmp/release_notes.txt)
@@ -133,18 +228,40 @@ jobs:
           CHANGED_FILES=$(cat /tmp/changed_files.txt)
           TODAY=$(date +'%Y-%m-%d')
 
+          # Build sync status context
+          if [ "$HAS_SYNC_HISTORY" = "true" ]; then
+            SYNC_CONTEXT="## Fork Sync Status
+          - **Last synced upstream version**: $LAST_SYNCED
+          - **Analyzing changes up to**: $RELEASE_TAG
+          - **New releases in this analysis**: $RELEASES_LIST ($RELEASE_COUNT total)
+          - **Fork has customizations**: Yes (POT plugin, error handling, UI changes)
+
+          ## Analysis Scope
+          The diff below shows ONLY what changed in upstream between $LAST_SYNCED and $RELEASE_TAG.
+          Do NOT report changes from releases <= $LAST_SYNCED as those are already incorporated.
+          "
+          else
+            SYNC_CONTEXT="## Fork Sync Status
+          - **First analysis** - no previous sync history
+          - **Analyzing release**: $RELEASE_TAG
+          "
+          fi
+
           # Construct the prompt
           PROMPT=$(cat <<'PROMPT_EOF'
-          You are analyzing the latest release of an upstream repository to help me (a fork maintainer) decide whether to merge the changes.
+          You are analyzing upstream changes to help a fork maintainer decide whether to merge.
 
           ## Context
           - **Upstream Repository**: alexta69/metube (YouTube downloader web app)
           - **Upstream Release**: RELEASE_TAG_PLACEHOLDER (published: RELEASE_PUBLISHED_PLACEHOLDER)
           - **Release URL**: RELEASE_URL_PLACEHOLDER
 
+          SYNC_CONTEXT_PLACEHOLDER
+
           ## Important Instructions
-          - Focus ONLY on what changed in the upstream release
-          - Do NOT analyze or mention the fork's custom modifications
+          - Focus ONLY on what changed between the last synced version and the new release(s)
+          - The diff provided shows upstream-to-upstream changes (not fork differences)
+          - Do NOT report changes that were in previous releases already synced
           - Provide actionable insights for merging decisions
 
           ## Upstream Release Notes
@@ -201,6 +318,7 @@ jobs:
           PROMPT="${PROMPT//RELEASE_TAG_PLACEHOLDER/$RELEASE_TAG}"
           PROMPT="${PROMPT//RELEASE_PUBLISHED_PLACEHOLDER/$RELEASE_PUBLISHED}"
           PROMPT="${PROMPT//RELEASE_URL_PLACEHOLDER/$RELEASE_URL}"
+          PROMPT="${PROMPT//SYNC_CONTEXT_PLACEHOLDER/$SYNC_CONTEXT}"
           PROMPT="${PROMPT//RELEASE_NOTES_PLACEHOLDER/$RELEASE_NOTES}"
           PROMPT="${PROMPT//CHANGED_FILES_PLACEHOLDER/$CHANGED_FILES}"
           PROMPT="${PROMPT//DIFF_STAT_PLACEHOLDER/$DIFF_STAT}"
@@ -302,6 +420,9 @@ jobs:
           RELEASE_URL: ${{ steps.upstream.outputs.url }}
           RELEASE_PUBLISHED: ${{ steps.upstream.outputs.published }}
           ANALYSIS_ERROR: ${{ steps.llm.outputs.error }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
+          RELEASES_LIST: ${{ steps.releases.outputs.releases_list }}
+          RELEASE_COUNT: ${{ steps.releases.outputs.release_count }}
         run: |
           TODAY=$(date +'%Y-%m-%d')
           ANALYSIS=$(cat /tmp/analysis.md)
@@ -317,11 +438,19 @@ jobs:
             LABELS="upstream-sync,automated"
           fi
 
+          # Build sync status header
+          if [ -n "$LAST_SYNCED" ]; then
+            SYNC_HEADER="**Last synced**: $LAST_SYNCED | **New releases**: $RELEASES_LIST"
+          else
+            SYNC_HEADER="**First analysis** (no previous sync history)"
+          fi
+
           # Create issue body
           cat > /tmp/issue_body.md <<EOF
           # Upstream Sync Analysis: $RELEASE_TAG
 
           **Analyzed**: $TODAY | **Released**: ${RELEASE_PUBLISHED:0:10}
+          $SYNC_HEADER
           [View Release]($RELEASE_URL)
 
           ---
@@ -331,6 +460,8 @@ jobs:
           ---
 
           *This analysis was automatically generated. Please review before taking action.*
+
+          **After syncing**, close this issue with a \`synced:$RELEASE_TAG\` label to track sync state.
           EOF
 
           # Create the issue
@@ -360,21 +491,30 @@ jobs:
           fi
 
           echo "Issue created: $ISSUE_URL"
+          echo "issue_url=$ISSUE_URL" >> $GITHUB_OUTPUT
 
       - name: Summary
         if: always()
         env:
           SKIP: ${{ steps.check.outputs.skip }}
+          SKIP_REASON: ${{ steps.check.outputs.skip_reason }}
           EXISTING_ISSUE: ${{ steps.check.outputs.existing_issue }}
           RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          LAST_SYNCED: ${{ steps.sync_state.outputs.last_synced }}
+          RELEASE_COUNT: ${{ steps.releases.outputs.release_count }}
         run: |
           echo "## Upstream Sync Check Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Upstream Release**: $RELEASE_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "**Latest upstream release**: $RELEASE_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "**Last synced version**: ${LAST_SYNCED:-N/A (first run)}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "$SKIP" = "true" ]; then
-            echo "**Status**: Skipped (already analyzed in issue #$EXISTING_ISSUE)" >> $GITHUB_STEP_SUMMARY
+            if [ "$SKIP_REASON" = "already_synced" ]; then
+              echo "**Status**: Skipped - already synced to $LAST_SYNCED (no new releases)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "**Status**: Skipped - already analyzed in issue #$EXISTING_ISSUE" >> $GITHUB_STEP_SUMMARY
+            fi
           else
-            echo "**Status**: Analysis completed and issue created" >> $GITHUB_STEP_SUMMARY
+            echo "**Status**: Analysis completed for $RELEASE_COUNT new release(s)" >> $GITHUB_STEP_SUMMARY
           fi
