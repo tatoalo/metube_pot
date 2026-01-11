@@ -83,7 +83,7 @@ jobs:
           git remote add upstream https://github.com/alexta69/metube.git
 
           echo "Fetching upstream tags..."
-          git fetch upstream --tags
+          git fetch upstream --tags --force
 
           echo "Verifying tag $RELEASE_TAG exists..."
           git rev-parse "$RELEASE_TAG" || {
