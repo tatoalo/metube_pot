@@ -1,0 +1,43 @@
+name: upstream-sync-label
+
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  add-synced-label:
+    # Only run for upstream-sync issues
+    if: contains(github.event.issue.labels.*.name, 'upstream-sync')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version and apply synced label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          echo "Processing closed upstream-sync issue #$ISSUE_NUMBER"
+          echo "Title: $ISSUE_TITLE"
+
+          # Extract version from title "Upstream Sync Analysis: VERSION"
+          VERSION=$(echo "$ISSUE_TITLE" | sed -n 's/^Upstream Sync Analysis: \(.*\)$/\1/p')
+
+          if [ -z "$VERSION" ]; then
+            echo "Could not extract version from issue title, skipping."
+            exit 0
+          fi
+
+          echo "Extracted version: $VERSION"
+
+          # Create synced label if it doesn't exist
+          gh label create "synced:$VERSION" \
+            --repo "${{ github.repository }}" \
+            --description "Synced to upstream $VERSION" \
+            --color "0e8a16" 2>/dev/null || echo "Label already exists"
+
+          # Add label to the issue
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --add-label "synced:$VERSION"
+
+          echo "Applied synced:$VERSION label to issue #$ISSUE_NUMBER"

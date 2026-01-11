@@ -461,7 +461,7 @@ jobs:
 
           *This analysis was automatically generated. Please review before taking action.*
 
-          **After syncing**, close this issue with a \`synced:$RELEASE_TAG\` label to track sync state.
+          **After syncing**, simply close this issue - a \`synced:$RELEASE_TAG\` label will be applied automatically.
           EOF
 
           # Create the issue
