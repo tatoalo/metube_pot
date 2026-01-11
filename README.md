@@ -20,10 +20,6 @@ services:
   metube:
     image: ghcr.io/tatoalo/metube_pot
     container_name: metube
-    environment:
-      - YTDL_OPTIONS={"extractor_args":{"youtube":{"player_client":["web"],"po_token":["web+YOUR_TOKEN_HERE"]}}}
+    [...]
 ```
 
----
-
-> For full documentation, see the upstream [MeTube README](https://github.com/alexta69/metube#readme).
