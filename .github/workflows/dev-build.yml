@@ -1,0 +1,126 @@
+name: Dev Build
+
+on:
+  pull_request:
+    types: [labeled, synchronize, opened, reopened, closed]
+
+jobs:
+  # Build and push dev image when PR has "dev" label
+  dev-build-push:
+    if: |
+      github.event.action != 'closed' &&
+      contains(github.event.pull_request.labels.*.name, 'dev')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=dev-pr${{ github.event.pull_request.number }}
+          tags: |
+            ghcr.io/${{ github.repository }}:dev
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ghcrRepo = `ghcr.io/${{ github.repository }}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚀 Dev image built and pushed!
+
+            **GHCR:** \`${ghcrRepo}:dev\`
+
+            Pull with:
+            \`\`\`bash
+            docker pull ${ghcrRepo}:dev
+            \`\`\`
+
+            _This image will be automatically deleted when the PR is merged or closed._`
+            });
+
+  # Cleanup dev image when PR is merged or closed
+  dev-cleanup:
+    if: |
+      github.event.action == 'closed' &&
+      contains(github.event.pull_request.labels.*.name, 'dev')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      - name: Delete dev tag from GHCR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const packageName = repo.toLowerCase();
+
+            try {
+              // Get all versions of the package
+              const versions = await github.rest.packages.getAllPackageVersionsForPackageOwnedByUser({
+                package_type: 'container',
+                package_name: packageName,
+                username: owner,
+              });
+
+              // Find the dev tag version
+              const devVersion = versions.data.find(v =>
+                v.metadata?.container?.tags?.includes('dev')
+              );
+
+              if (devVersion) {
+                await github.rest.packages.deletePackageVersionForUser({
+                  package_type: 'container',
+                  package_name: packageName,
+                  username: owner,
+                  package_version_id: devVersion.id,
+                });
+                console.log('Deleted dev tag from GHCR');
+              } else {
+                console.log('Dev tag not found in GHCR');
+              }
+            } catch (error) {
+              console.log(`Failed to delete from GHCR: ${error.message}`);
+            }
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🧹 Dev image cleanup complete!
+
+            The \`dev\` tag has been removed from GHCR.`
+            });

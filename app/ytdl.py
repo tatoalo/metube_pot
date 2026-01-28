@@ -4,17 +4,20 @@ import multiprocessing
 import os
 import re
 import shutil
+import threading
 import yt_dlp
 from collections import OrderedDict
 import shelve
 import time
 import types
 import dbm
+import glob
 import subprocess
 
 import yt_dlp.networking.impersonate
 from dl_formats import get_format, get_opts, AUDIO_FORMATS
 from datetime import datetime
+import json
 
 log = logging.getLogger("ytdl")
 
@@ -191,11 +194,13 @@ class Download:
                     **self.ytdl_opts,
                 }
 
-                # Add impersonate flag on retry
+                # Add impersonate flag on retry and force fresh download
+                # (stale .part files cause 403 when resumed with a new URL)
                 if retry_with_impersonate:
                     ytdl_params["impersonate"] = (
                         yt_dlp.networking.impersonate.ImpersonateTarget.from_str("chrome")
                     )
+                    ytdl_params["continuedl"] = False
                     self.status_queue.put(
                         {"status": "downloading", "msg": "Retrying in a chiller way..."}
                     )
@@ -210,7 +215,285 @@ class Download:
                         {"key": "FFmpegSplitChapters", "force_keyframes": False}
                     )
 
-                ret = yt_dlp.YoutubeDL(params=ytdl_params).download([self.info.url])
+                # For StreamingCommunity downloads, write custom info.json before download
+                # so the NFO postprocessor has our metadata
+                is_streamingcommunity = (
+                    self.info.entry
+                    and "streamingcommunity" in self.info.entry.get("extractor", "").lower()
+                )
+                if is_streamingcommunity and self.info.entry:
+                    # Extract fresh m3u8 URL just-in-time (tokens expire quickly!)
+                    if self.info.entry.get("_sc_needs_m3u8_extraction"):
+                        from extractors.streamingcommunity import StreamingCommunityExtractor
+                        log.info(f"Extracting fresh m3u8 URL for: {self.info.title}")
+                        fresh_result = StreamingCommunityExtractor.get_fresh_m3u8(
+                            self.info.entry.get("_sc_base_url"),
+                            self.info.url
+                        )
+                        if not fresh_result:
+                            log.error("Failed to extract fresh m3u8 URL")
+                            self.status_queue.put({"status": "error", "msg": "Failed to extract video URL"})
+                            break
+
+                        m3u8_url = fresh_result["m3u8_url"]
+                        http_headers = fresh_result["http_headers"]
+                        log.info(f"Got fresh m3u8 URL: {m3u8_url[:80]}...")
+
+                        # Compute output filename
+                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', self.info.title)
+                        output_path = os.path.join(self.download_dir, f"{safe_title}.mp4")
+                        info_json_path = os.path.join(self.download_dir, f"{safe_title}.info.json")
+
+                        # Write info.json
+                        try:
+                            os.makedirs(os.path.dirname(output_path) or self.download_dir, exist_ok=True)
+                            with open(info_json_path, "w", encoding="utf-8") as f:
+                                json.dump(self.info.entry, f, indent=2, ensure_ascii=False)
+                            log.info(f"Wrote StreamingCommunity info.json: {info_json_path}")
+                        except Exception as e:
+                            log.warning(f"Failed to write info.json: {e}")
+
+                        # Download via N_m3u8DL-RE (parallel) or ffmpeg (sequential fallback)
+                        cookies = fresh_result.get("cookies", "")
+                        use_ffmpeg = os.environ.get('SC_USE_FFMPEG', 'false').lower() in ('true', '1', 'on')
+                        self.status_queue.put({"status": "downloading", "msg": "Starting download..."})
+
+                        if use_ffmpeg:
+                            # === FFMPEG FALLBACK (set SC_USE_FFMPEG=true to enable) ===
+                            log.info(f"Running ffmpeg for StreamingCommunity download: {self.info.title}")
+                            log.info(f"m3u8 URL: {m3u8_url[:100]}...")
+
+                            header_str = f"User-Agent: {http_headers.get('User-Agent', '')}\r\n"
+                            header_str += f"Referer: {http_headers.get('Referer', '')}\r\n"
+                            header_str += f"Origin: {http_headers.get('Origin', '')}\r\n"
+                            if cookies:
+                                header_str += f"Cookie: {cookies}\r\n"
+
+                            total_duration = None
+                            try:
+                                probe_cmd = [
+                                    "ffprobe",
+                                    "-v", "error",
+                                    "-headers", header_str,
+                                    "-show_entries", "format=duration",
+                                    "-of", "default=noprint_wrappers=1:nokey=1",
+                                    m3u8_url
+                                ]
+                                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+                                if probe_result.returncode == 0 and probe_result.stdout.strip():
+                                    total_duration = float(probe_result.stdout.strip())
+                                    log.info(f"Total duration: {total_duration:.1f}s")
+                            except Exception as e:
+                                log.warning(f"Could not get duration: {e}")
+
+                            ffmpeg_cmd = [
+                                "ffmpeg",
+                                "-y",
+                                "-headers", header_str,
+                                "-i", m3u8_url,
+                                "-c", "copy",
+                                "-bsf:a", "aac_adtstoasc",
+                                "-progress", "pipe:1",
+                                output_path
+                            ]
+
+                            log.info(f"FFmpeg command: ffmpeg -headers '...' -i '{m3u8_url[:50]}...' -c copy {output_path}")
+
+                            process = subprocess.Popen(
+                                ffmpeg_cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True,
+                            )
+
+                            stderr_lines = []
+                            def _drain_stderr():
+                                for line in process.stderr:
+                                    stderr_lines.append(line)
+                            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+                            stderr_thread.start()
+
+                            current_time = 0
+                            current_size = 0
+                            current_speed = 0
+                            last_update = time.time()
+
+                            for line in process.stdout:
+                                line = line.strip()
+                                if "=" not in line:
+                                    continue
+
+                                key, _, value = line.partition("=")
+
+                                if key == "out_time_ms" and value.isdigit():
+                                    current_time = int(value) / 1_000_000
+                                elif key == "total_size" and value.isdigit():
+                                    current_size = int(value)
+                                elif key == "speed" and value.endswith("x"):
+                                    try:
+                                        current_speed = float(value[:-1])
+                                    except ValueError:
+                                        pass
+                                elif key == "progress":
+                                    now = time.time()
+                                    if now - last_update >= 0.5:
+                                        last_update = now
+                                        status_update = {"status": "downloading"}
+
+                                        if current_size > 0:
+                                            status_update["downloaded_bytes"] = current_size
+
+                                        if total_duration and total_duration > 0 and current_time > 0:
+                                            status_update["total_bytes_estimate"] = int(current_size / (current_time / total_duration)) if current_time > 0 else 0
+
+                                            if current_speed > 0:
+                                                remaining_time = (total_duration - current_time) / current_speed
+                                                status_update["eta"] = int(remaining_time)
+                                                status_update["speed"] = current_speed * (current_size / current_time) if current_time > 0 else 0
+
+                                        self.status_queue.put(status_update)
+                                        log.debug(f"FFmpeg progress: time={current_time:.1f}s size={current_size//1024}KB speed={current_speed}x")
+
+                            process.wait()
+                            stderr_thread.join(timeout=5)
+                            ret = process.returncode
+
+                            if ret == 0 and os.path.exists(output_path):
+                                final_size = os.path.getsize(output_path)
+                                self.status_queue.put({"status": "finished", "filename": output_path})
+                                log.info(f"FFmpeg completed: {output_path} ({final_size // (1024*1024)} MB)")
+                            else:
+                                stderr_tail = "".join(stderr_lines[-20:])
+                                log.error(f"FFmpeg failed with code {ret}, stderr:\n{stderr_tail}")
+                                self.status_queue.put({"status": "error", "msg": f"FFmpeg failed with code {ret}"})
+
+                        else:
+                            # === N_m3u8DL-RE (default, multi-threaded) ===
+                            thread_count = os.environ.get('SC_THREAD_COUNT', '16')
+                            temp_dir = self.temp_dir or os.path.join(self.download_dir, '.tmp')
+                            log.info(f"Running N_m3u8DL-RE for StreamingCommunity download: {self.info.title}")
+                            log.info(f"m3u8 URL: {m3u8_url[:100]}...")
+
+                            nm3u8_cmd = [
+                                "N_m3u8DL-RE", m3u8_url,
+                                "--save-dir", self.download_dir,
+                                "--save-name", safe_title,
+                                "--tmp-dir", temp_dir,
+                                "--thread-count", thread_count,
+                                "--auto-select",
+                                "--del-after-done",
+                                "--mux-after-done", "format=mp4:muxer=ffmpeg",
+                                "--log-level", "INFO",
+                                "-H", f"User-Agent: {http_headers.get('User-Agent', '')}",
+                                "-H", f"Referer: {http_headers.get('Referer', '')}",
+                                "-H", f"Origin: {http_headers.get('Origin', '')}",
+                            ]
+                            if cookies:
+                                nm3u8_cmd.extend(["-H", f"Cookie: {cookies}"])
+
+                            log.info(f"N_m3u8DL-RE command: {' '.join(nm3u8_cmd[:5])}...")
+
+                            # ANSI escape code stripper
+                            ansi_re = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r')
+
+                            # Progress regex patterns
+                            seg_pct_re = re.compile(r'(\d+)/(\d+)\s+([\d.]+)%')
+                            size_re = re.compile(r'([\d.]+)\s*(KB|MB|GB)\s*/\s*([\d.]+)\s*(KB|MB|GB)')
+                            speed_re = re.compile(r'([\d.]+)\s*(KB|MB|GB)ps')
+                            eta_re = re.compile(r'(\d{2}):(\d{2}):(\d{2})\s*$')
+
+                            def _parse_size_bytes(value, unit):
+                                v = float(value)
+                                if unit == 'KB':
+                                    return v * 1024
+                                elif unit == 'MB':
+                                    return v * 1024 * 1024
+                                elif unit == 'GB':
+                                    return v * 1024 * 1024 * 1024
+                                return v
+
+                            process = subprocess.Popen(
+                                nm3u8_cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                universal_newlines=True,
+                            )
+
+                            last_update = time.time()
+                            for raw_line in process.stdout:
+                                line = ansi_re.sub('', raw_line).strip()
+                                if not line:
+                                    continue
+                                log.debug(f"N_m3u8DL-RE: {line}")
+
+                                now = time.time()
+                                if now - last_update < 0.5:
+                                    continue
+                                last_update = now
+
+                                status_update = {"status": "downloading"}
+
+                                # Parse segment progress & percent
+                                m = seg_pct_re.search(line)
+                                if m:
+                                    done_segs = int(m.group(1))
+                                    total_segs = int(m.group(2))
+                                    status_update["downloaded_bytes"] = done_segs
+                                    status_update["total_bytes"] = total_segs
+
+                                # Parse byte sizes
+                                m = size_re.search(line)
+                                if m:
+                                    dl_bytes = _parse_size_bytes(m.group(1), m.group(2))
+                                    total_bytes = _parse_size_bytes(m.group(3), m.group(4))
+                                    status_update["downloaded_bytes"] = int(dl_bytes)
+                                    status_update["total_bytes"] = int(total_bytes)
+
+                                # Parse speed
+                                m = speed_re.search(line)
+                                if m:
+                                    speed_bytes = _parse_size_bytes(m.group(1), m.group(2))
+                                    status_update["speed"] = speed_bytes
+
+                                # Parse ETA (HH:MM:SS at end of line)
+                                m = eta_re.search(line)
+                                if m:
+                                    h, mn, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                                    status_update["eta"] = h * 3600 + mn * 60 + s
+
+                                if len(status_update) > 1:
+                                    self.status_queue.put(status_update)
+
+                            process.wait()
+                            ret = process.returncode
+
+                            # Find output file
+                            if ret == 0:
+                                if os.path.exists(output_path):
+                                    final_path = output_path
+                                else:
+                                    # Glob fallback: N_m3u8DL-RE may append codec info to filename
+                                    pattern = os.path.join(self.download_dir, f"{safe_title}*.mp4")
+                                    candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+                                    final_path = candidates[0] if candidates else None
+
+                                if final_path and os.path.exists(final_path):
+                                    final_size = os.path.getsize(final_path)
+                                    self.status_queue.put({"status": "finished", "filename": final_path})
+                                    log.info(f"N_m3u8DL-RE completed: {final_path} ({final_size // (1024*1024)} MB)")
+                                else:
+                                    log.error(f"N_m3u8DL-RE exited OK but output not found: {output_path}")
+                                    self.status_queue.put({"status": "error", "msg": "Download finished but output file not found"})
+                            else:
+                                log.error(f"N_m3u8DL-RE failed with code {ret}")
+                                self.status_queue.put({"status": "error", "msg": f"N_m3u8DL-RE failed with code {ret}"})
+
+                        break  # Exit loop after SC download attempt
+                    else:
+                        # Fallback to yt-dlp if no m3u8 extraction needed
+                        ret = yt_dlp.YoutubeDL(params=ytdl_params).download([self.info.url])
+                else:
+                    ret = yt_dlp.YoutubeDL(params=ytdl_params).download([self.info.url])
                 self.status_queue.put({"status": "finished" if ret == 0 else "error"})
                 log.info(f"Finished download for: {self.info.title}")
                 break  # Success, exit loop
@@ -511,6 +794,17 @@ class DownloadQueue:
                 asyncio.create_task(self.notifier.completed(download.info))
 
     def __extract_info(self, url):
+        # Check for custom extractors first
+        from extractors.streamingcommunity import StreamingCommunityExtractor
+
+        if StreamingCommunityExtractor.can_extract(url):
+            log.info(f"Using StreamingCommunity extractor for: {url}")
+            result = StreamingCommunityExtractor.extract_info(url)
+            if result:
+                return result
+            raise yt_dlp.utils.DownloadError("StreamingCommunity extraction failed")
+
+        # Standard yt-dlp extraction
         debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
         return yt_dlp.YoutubeDL(
             params={
