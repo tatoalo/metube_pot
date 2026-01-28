@@ -11,7 +11,9 @@ dependencies = [
     # yt-dlp[curl-cffi] requires curl-cffi<0.14 for CPython
     "curl-cffi>=0.5.10,<0.14",
     "watchfiles==1.1.1",
-    "bgutil-ytdlp-pot-provider==1.2.2"
+    "bgutil-ytdlp-pot-provider==1.2.2",
+    "beautifulsoup4==4.14.3",
+    "requests==2.32.5",
 ]
 
 [dependency-groups]
