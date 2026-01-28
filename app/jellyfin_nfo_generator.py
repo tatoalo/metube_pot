@@ -56,12 +56,38 @@ def seconds_to_minutes(seconds: int | float | None) -> str:
 def create_nfo_xml(info: dict) -> str:
     """
     Create Jellyfin-compatible NFO XML from yt-dlp info dict.
+    Supports both YouTube and StreamingCommunity sources.
     """
-    root = Element("movie")
+    # Determine if this is a TV episode (StreamingCommunity or other)
+    is_episode = bool(info.get("series") or info.get("season_number") or info.get("episode_number"))
+    extractor = info.get("extractor", "").lower()
+
+    if is_episode:
+        root = Element("episodedetails")
+    else:
+        root = Element("movie")
 
     title = info.get("title", "Unknown Title")
     SubElement(root, "title").text = title
     SubElement(root, "originaltitle").text = title
+
+    # Episode-specific metadata
+    if is_episode:
+        series = info.get("series", "")
+        if series:
+            SubElement(root, "showtitle").text = series
+
+        season_num = info.get("season_number")
+        if season_num is not None:
+            SubElement(root, "season").text = str(season_num)
+
+        episode_num = info.get("episode_number")
+        if episode_num is not None:
+            SubElement(root, "episode").text = str(episode_num)
+
+        episode_title = info.get("episode", "")
+        if episode_title:
+            SubElement(root, "subtitle").text = episode_title
 
     description = info.get("description", "")
     SubElement(root, "plot").text = description
@@ -78,13 +104,17 @@ def create_nfo_xml(info: dict) -> str:
         SubElement(root, "studio").text = uploader
         SubElement(root, "director").text = uploader
 
-    # YouTube ID
+    # Unique ID based on source
     video_id = info.get("id", "")
     if video_id:
-        uniqueid = SubElement(root, "uniqueid", type="youtube")
+        if "streamingcommunity" in extractor:
+            uniqueid = SubElement(root, "uniqueid", type="streamingcommunity")
+        else:
+            uniqueid = SubElement(root, "uniqueid", type="youtube")
         uniqueid.text = video_id
 
-    webpage_url = info.get("webpage_url", "")
+    # Use original_url if available (StreamingCommunity), otherwise webpage_url
+    webpage_url = info.get("original_url", info.get("webpage_url", ""))
     if webpage_url:
         SubElement(root, "website").text = webpage_url
 

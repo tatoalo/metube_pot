@@ -134,6 +134,7 @@ config = Config()
 # This re-applies the log level after Config loads, in case LOGLEVEL was
 # overridden by config file settings or differs from the environment variable.
 logging.getLogger().setLevel(parseLogLevel(str(config.LOGLEVEL)) or logging.INFO)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
 class ObjectSerializer(json.JSONEncoder):
     def default(self, obj):
