@@ -3,6 +3,7 @@ name: update-yt-dlp
 on:
   schedule:
     - cron: "0 0 * * *"
+  workflow_dispatch:
 
 jobs:
   update-yt-dlp:
@@ -12,28 +13,119 @@ jobs:
         uses: actions/checkout@v6
         with:
           token: ${{ secrets.TATOALO_REPO_PAT }}
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Update yt-dlp
-        env:
-          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+
+      - name: Check for yt-dlp nightly updates
+        id: update
         run: |
-          uv sync --locked
-          # Check if yt-dlp has updates available
-          LATEST_VERSION=$(uv pip list --outdated --format json | jq -r '.[] | select(.name == "yt-dlp") | .latest_version')
-          CURRENT_VERSION=$(uv pip list --format json | jq -r '.[] | select(.name == "yt-dlp") | .version')
-          if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
-            echo "Updating yt-dlp from $CURRENT_VERSION to $LATEST_VERSION"
-            uv lock --upgrade-package "yt-dlp[default,curl-cffi]"
-            git config --global user.email "updater@metube"
-            git config --global user.name "AutoUpdater"
-            git add uv.lock
-            git commit -m "upgrade yt-dlp from $CURRENT_VERSION to $LATEST_VERSION"
-            git push
+          # Install current yt-dlp nightly to get version
+          pip install --pre yt-dlp
+
+          CURRENT_VERSION=$(pip show yt-dlp | grep Version | cut -d' ' -f2)
+          echo "Current yt-dlp version: $CURRENT_VERSION"
+
+          # Check for newer nightly version
+          pip install --dry-run --pre -U yt-dlp 2>&1 | tee /tmp/pip_output.txt
+
+          # Extract latest version from dry-run output
+          if grep -q "Would install" /tmp/pip_output.txt; then
+            LATEST_VERSION=$(grep "Would install" /tmp/pip_output.txt | grep -oE "yt-dlp-[0-9.]+" | sed 's/yt-dlp-//')
+            echo "Latest yt-dlp nightly version: $LATEST_VERSION"
+
+            if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
+              echo "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+              echo "has_update=true" >> $GITHUB_OUTPUT
+              echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+              echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "yt-dlp is already up to date ($CURRENT_VERSION)"
+              echo "has_update=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "yt-dlp is already up to date ($CURRENT_VERSION)"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Dockerfile
+        if: steps.update.outputs.has_update == 'true'
+        env:
+          CURRENT_VERSION: ${{ steps.update.outputs.current_version }}
+          LATEST_VERSION: ${{ steps.update.outputs.latest_version }}
+        run: |
+          echo "Updating Dockerfile with yt-dlp version $LATEST_VERSION"
+
+          # Update the yt-dlp version pin in Dockerfile if it exists
+          # This handles both pinned versions (yt-dlp==X.X.X) and unpinned (yt-dlp)
+          if grep -q "yt-dlp==" Dockerfile; then
+            sed -i "s/yt-dlp==[0-9.]*[^\"']*/yt-dlp==$LATEST_VERSION/g" Dockerfile
+          fi
+
+          # Show changes
+          git diff Dockerfile || true
+
+      - name: Create Pull Request
+        if: steps.update.outputs.has_update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TATOALO_REPO_PAT }}
+          CURRENT_VERSION: ${{ steps.update.outputs.current_version }}
+          LATEST_VERSION: ${{ steps.update.outputs.latest_version }}
+        run: |
+          BRANCH="auto/update-yt-dlp-nightly-$(date +%Y%m%d)"
+
+          # Check if branch already exists
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists, skipping"
+            exit 0
+          fi
+
+          # Configure git
+          git config --global user.email "updater@metube"
+          git config --global user.name "AutoUpdater"
+
+          # Create branch and commit
+          git checkout -b "$BRANCH"
+          git add Dockerfile
+          git commit -m "upgrade yt-dlp nightly to $LATEST_VERSION"
+          git push -u origin "$BRANCH"
+
+          # Create PR
+          gh pr create \
+            --title "Upgrade yt-dlp nightly to $LATEST_VERSION" \
+            --body "$(cat <<EOF
+          ## Summary
+          - Automated yt-dlp nightly update
+          - Version: $CURRENT_VERSION -> $LATEST_VERSION
+
+          ## Test plan
+          - [ ] Verify Docker build succeeds
+          - [ ] Test video download functionality
+
+          ---
+          *This PR was automatically created by the update-yt-dlp workflow.*
+          EOF
+          )" \
+            --label "auto-update"
+
+      - name: Summary
+        if: always()
+        env:
+          HAS_UPDATE: ${{ steps.update.outputs.has_update }}
+          CURRENT_VERSION: ${{ steps.update.outputs.current_version }}
+          LATEST_VERSION: ${{ steps.update.outputs.latest_version }}
+        run: |
+          echo "## yt-dlp Nightly Update Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$HAS_UPDATE" = "true" ]; then
+            echo "**Status**: Update available" >> $GITHUB_STEP_SUMMARY
+            echo "**Current version**: $CURRENT_VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "**Latest version**: $LATEST_VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "A pull request has been created for this update." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status**: Already up to date" >> $GITHUB_STEP_SUMMARY
           fi

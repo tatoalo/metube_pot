@@ -207,12 +207,13 @@ jobs:
           echo "Diff generated. Files changed in upstream:"
           cat /tmp/diff_stat.txt
 
-      - name: Call OpenRouter for analysis
+      - name: Call LLM for analysis
         if: steps.check.outputs.skip != 'true'
         id: llm
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          LLM_PROVIDER_API_KEY: ${{ secrets.LLM_PROVIDER_API_KEY }}
+          LLM_PROVIDER_MODEL: ${{ secrets.LLM_PROVIDER_MODEL }}
+          LLM_PROVIDER_URL: ${{ secrets.LLM_PROVIDER_URL }}
           RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
           RELEASE_URL: ${{ steps.upstream.outputs.url }}
           RELEASE_PUBLISHED: ${{ steps.upstream.outputs.published }}
@@ -326,7 +327,7 @@ jobs:
 
           # Prepare JSON payload
           PAYLOAD=$(jq -n \
-            --arg model "$OPENROUTER_MODEL" \
+            --arg model "$LLM_PROVIDER_MODEL" \
             --arg prompt "$PROMPT" \
             '{
               model: $model,
@@ -348,11 +349,9 @@ jobs:
             echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES..."
 
             HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -X POST "https://openrouter.ai/api/v1/chat/completions" \
+              -X POST "$LLM_PROVIDER_URL" \
               -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-              -H "HTTP-Referer: https://github.com/${{ github.repository }}" \
-              -H "X-Title: MeTube Fork Sync Analyzer" \
+              -H "Authorization: Bearer $LLM_PROVIDER_API_KEY" \
               -d "$PAYLOAD")
 
             HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
