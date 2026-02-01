@@ -140,10 +140,12 @@ jobs:
         run: |
           # Create labels if they don't exist
           gh label create "upstream-sync" \
+            --repo ${{ github.repository }} \
             --description "Automated upstream sync analysis" \
             --color "0366d6" 2>/dev/null || true
 
           gh label create "automated" \
+            --repo ${{ github.repository }} \
             --description "Automatically generated" \
             --color "6f42c1" 2>/dev/null || true
 
@@ -431,6 +433,7 @@ jobs:
             LABELS="upstream-sync,automated,needs-attention"
             # Create needs-attention label if it doesn't exist
             gh label create "needs-attention" \
+              --repo ${{ github.repository }} \
               --description "Requires manual review" \
               --color "d93f0b" --force 2>&1 || true
           else
