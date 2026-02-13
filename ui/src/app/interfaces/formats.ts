@@ -23,6 +23,7 @@ export const Formats: Format[] = [
     text: 'MP4',
     qualities: [
       { id: 'best', text: 'Best' },
+      { id: 'best_remux', text: 'Best (Remux)' },
       { id: 'best_ios', text: 'Best (iOS)' },
       { id: '2160', text: '2160p' },
       { id: '1440', text: '1440p' },
