@@ -35,9 +35,11 @@ def get_format(format: str, quality: str) -> str:
             return "bestaudio/best"
         # video {res} {vfmt} + audio {afmt} {res} {vfmt}
         vfmt, afmt = ("[ext=mp4]", "[ext=m4a]") if format == "mp4" else ("", "")
-        vres = f"[height<={quality}]" if quality not in ("best", "best_ios", "worst") else ""
+        vres = f"[height<={quality}]" if quality not in ("best", "best_remux", "best_ios", "worst") else ""
         vcombo = vres + vfmt
 
+        if quality == "best_remux":
+            return "bestvideo+bestaudio/best"
         if quality == "best_ios":
             # iOS has strict requirements for video files, requiring h264 or h265
             # video codec and aac audio codec in MP4 container. This format string
@@ -90,6 +92,18 @@ def get_opts(format: str, quality: str, ytdl_opts: dict) -> dict:
             )
             postprocessors.append({"key": "FFmpegMetadata"})
             postprocessors.append({"key": "EmbedThumbnail"})
+
+    if format == "mp4" and quality == "best_remux":
+        # Remove any custom format string from ytdl_opts so it doesn't
+        # override get_format()'s "bestvideo+bestaudio/best" via **opts spread
+        opts.pop("format", None)
+        opts["merge_output_format"] = "mp4"
+        postprocessors.append(
+            {
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4",
+            }
+        )
 
     if format == "thumbnail":
         opts["skip_download"] = True
