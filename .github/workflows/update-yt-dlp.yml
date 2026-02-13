@@ -2,7 +2,7 @@ name: update-yt-dlp
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 */3 * *"
   workflow_dispatch:
 
 jobs:
@@ -22,29 +22,33 @@ jobs:
       - name: Check for yt-dlp nightly updates
         id: update
         run: |
-          # Install current yt-dlp nightly to get version
-          pip install --pre yt-dlp
+          # Read current pinned version from Dockerfile
+          CURRENT_VERSION=$(grep -oE "yt-dlp==[^ \"']*" Dockerfile | sed 's/yt-dlp==//')
 
-          CURRENT_VERSION=$(pip show yt-dlp | grep Version | cut -d' ' -f2)
-          echo "Current yt-dlp version: $CURRENT_VERSION"
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "::error::Could not extract yt-dlp version from Dockerfile"
+            exit 1
+          fi
 
-          # Check for newer nightly version
-          pip install --dry-run --pre -U yt-dlp 2>&1 | tee /tmp/pip_output.txt
+          echo "Current version (Dockerfile): $CURRENT_VERSION"
 
-          # Extract latest version from dry-run output
-          if grep -q "Would install" /tmp/pip_output.txt; then
-            LATEST_VERSION=$(grep "Would install" /tmp/pip_output.txt | grep -oE "yt-dlp-[0-9.]+" | sed 's/yt-dlp-//')
-            echo "Latest yt-dlp nightly version: $LATEST_VERSION"
+          # Check latest available nightly (dry-run on clean env, nothing installed)
+          pip install --dry-run --pre yt-dlp 2>&1 | tee /tmp/pip_output.txt
 
-            if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
-              echo "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
-              echo "has_update=true" >> $GITHUB_OUTPUT
-              echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-              echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-            else
-              echo "yt-dlp is already up to date ($CURRENT_VERSION)"
-              echo "has_update=false" >> $GITHUB_OUTPUT
-            fi
+          LATEST_VERSION=$(grep "Would install" /tmp/pip_output.txt | grep -oE "yt-dlp-[^ ,]+" | sed 's/yt-dlp-//')
+
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "::error::Could not determine latest yt-dlp nightly version"
+            exit 1
+          fi
+
+          echo "Latest nightly version: $LATEST_VERSION"
+
+          if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
+            echo "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           else
             echo "yt-dlp is already up to date ($CURRENT_VERSION)"
             echo "has_update=false" >> $GITHUB_OUTPUT
@@ -53,19 +57,11 @@ jobs:
       - name: Update Dockerfile
         if: steps.update.outputs.has_update == 'true'
         env:
-          CURRENT_VERSION: ${{ steps.update.outputs.current_version }}
           LATEST_VERSION: ${{ steps.update.outputs.latest_version }}
         run: |
           echo "Updating Dockerfile with yt-dlp version $LATEST_VERSION"
-
-          # Update the yt-dlp version pin in Dockerfile if it exists
-          # This handles both pinned versions (yt-dlp==X.X.X) and unpinned (yt-dlp)
-          if grep -q "yt-dlp==" Dockerfile; then
-            sed -i "s/yt-dlp==[0-9.]*[^\"']*/yt-dlp==$LATEST_VERSION/g" Dockerfile
-          fi
-
-          # Show changes
-          git diff Dockerfile || true
+          sed -i "s/yt-dlp==[^ \"']*/yt-dlp==$LATEST_VERSION/g" Dockerfile
+          git diff Dockerfile
 
       - name: Create Pull Request
         if: steps.update.outputs.has_update == 'true'
@@ -92,23 +88,19 @@ jobs:
           git commit -m "upgrade yt-dlp nightly to $LATEST_VERSION"
           git push -u origin "$BRANCH"
 
-          # Create PR
-          gh pr create \
+          # Create PR and enable auto-merge
+          PR_URL=$(gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Upgrade yt-dlp nightly to $LATEST_VERSION" \
-            --body "$(cat <<EOF
-          ## Summary
+            --body "## Summary
           - Automated yt-dlp nightly update
           - Version: $CURRENT_VERSION -> $LATEST_VERSION
 
-          ## Test plan
-          - [ ] Verify Docker build succeeds
-          - [ ] Test video download functionality
-
           ---
-          *This PR was automatically created by the update-yt-dlp workflow.*
-          EOF
-          )" \
-            --label "auto-update"
+          *This PR was automatically created by the update-yt-dlp workflow.*" \
+            --label "auto-update")
+
+          gh pr merge "$PR_URL" --auto --squash
 
       - name: Summary
         if: always()
@@ -125,7 +117,7 @@ jobs:
             echo "**Current version**: $CURRENT_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "**Latest version**: $LATEST_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "A pull request has been created for this update." >> $GITHUB_STEP_SUMMARY
+            echo "A pull request has been created with auto-merge enabled." >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status**: Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
