@@ -323,12 +323,75 @@ class StreamingCommunityExtractor:
             log.error(f"Error extracting watch URL: {e}")
             return None
 
+    def extract_title(self, url: str) -> Optional[Dict[str, Any]]:
+        """Extract all seasons/episodes from a title URL, or a single movie."""
+        match = re.search(r"/titles/(\d+)-([^/]+)$", url)
+        if not match:
+            log.error(f"Invalid title URL: {url}")
+            return None
+
+        title_id = match.group(1)
+        title_slug = match.group(2)
+
+        title_data = self._inertia_get(f"/it/titles/{title_id}-{title_slug}")
+        props = title_data.get("props", {})
+        title_info = props.get("title", {})
+        title_name = title_info.get("name", "Unknown")
+        title_type = title_info.get("type", "movie")
+
+        # Movies: extract as a single watch URL
+        if title_type != "tv":
+            log.info(f"Extracting movie: {title_name}")
+            watch_url = f"{self.base_url}/it/watch/{title_id}"
+            return self.extract_watch(watch_url)
+
+        # TV shows: find all seasons and extract each one
+        seasons = title_info.get("seasons", [])
+        if not seasons:
+            # Seasons may be in the loadedSeason or need a separate fetch
+            loaded_season = props.get("loadedSeason", {})
+            if loaded_season:
+                seasons = [loaded_season]
+
+        if not seasons:
+            log.error(f"No seasons found for {title_name}")
+            return None
+
+        log.info(f"Extracting {title_name}: found {len(seasons)} season(s)")
+
+        all_entries = []
+        for season in seasons:
+            season_num = season.get("number")
+            if season_num is None:
+                continue
+
+            season_url = f"{self.base_url}/it/titles/{title_id}-{title_slug}/season-{season_num}"
+            log.info(f"Extracting Season {season_num}...")
+            season_result = self.extract_season(season_url)
+            if season_result and season_result.get("entries"):
+                all_entries.extend(season_result["entries"])
+
+        if not all_entries:
+            return None
+
+        return {
+            "id": f"sc_{title_id}",
+            "title": title_name,
+            "original_url": url,
+            "_type": "playlist",
+            "entries": all_entries,
+            "extractor": "streamingcommunity",
+            "extractor_key": "StreamingCommunity",
+        }
+
     def extract(self, url: str) -> Optional[Dict[str, Any]]:
         """Extract from any supported URL type."""
         if "/season-" in url:
             return self.extract_season(url)
         elif "/watch/" in url:
             return self.extract_watch(url)
+        elif "/titles/" in url:
+            return self.extract_title(url)
         else:
             log.error(f"Unsupported URL format: {url}")
             return None
