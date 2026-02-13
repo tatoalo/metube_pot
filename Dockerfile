@@ -36,6 +36,7 @@ RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
 RUN pip install --break-system-packages --no-deps yt-dlp==2026.2.12.233641.dev0
 
 COPY app ./app
+COPY ui/src/formats.json ./app/formats.json
 COPY --from=builder /metube/dist/metube ./ui/dist/metube
 
 ENV UID=1000

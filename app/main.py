@@ -300,11 +300,28 @@ async def history(request):
     log.info("Sending download history")
     return web.Response(text=serializer.encode(history))
 
+_formats_json_candidates = [
+    os.path.join(os.path.dirname(__file__), 'formats.json'),             # Docker: copied alongside app/
+    os.path.join(os.path.dirname(__file__), '..', 'ui', 'src', 'formats.json'),  # Dev: repo layout
+]
+_formats_json_path = next((p for p in _formats_json_candidates if os.path.exists(p)), None)
+if _formats_json_path:
+    with open(_formats_json_path) as _f:
+        _available_formats = json.load(_f)
+    log.info(f'Loaded formats from {_formats_json_path}')
+else:
+    log.warning('formats.json not found, using empty format list')
+    _available_formats = []
+
+def get_available_formats():
+    return _available_formats
+
 @sio.event
 async def connect(sid, environ):
     log.info(f"Client connected: {sid}")
     await sio.emit('all', serializer.encode(dqueue.get()), to=sid)
     await sio.emit('configuration', serializer.encode(config), to=sid)
+    await sio.emit('formats', serializer.encode(get_available_formats()), to=sid)
     if config.CUSTOM_DIRS:
         await sio.emit('custom_dirs', serializer.encode(get_custom_dirs()), to=sid)
     if config.YTDL_OPTIONS_FILE:
