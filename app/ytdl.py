@@ -482,8 +482,47 @@ class Download:
                                     self.status_queue.put({"status": "finished", "filename": final_path})
                                     log.info(f"N_m3u8DL-RE completed: {final_path} ({final_size // (1024*1024)} MB)")
                                 else:
-                                    log.error(f"N_m3u8DL-RE exited OK but output not found: {output_path}")
-                                    self.status_queue.put({"status": "error", "msg": "Download finished but output file not found"})
+                                    # Mux failed silently — try manual ffmpeg mux from segment folder
+                                    seg_dir = os.path.join(self.download_dir, safe_title)
+                                    if os.path.isdir(seg_dir):
+                                        log.warning(f"N_m3u8DL-RE mux failed, attempting manual ffmpeg mux from: {seg_dir}")
+                                        # Find downloaded segment files (video/audio .m4s or .ts)
+                                        seg_files = sorted(
+                                            [os.path.join(dp, f)
+                                             for dp, _, fns in os.walk(seg_dir)
+                                             for f in fns if f.endswith(('.m4s', '.ts', '.mp4', '.m4a', '.aac'))],
+                                            key=os.path.getmtime
+                                        )
+                                        if seg_files:
+                                            try:
+                                                concat_path = os.path.join(seg_dir, '_concat.txt')
+                                                with open(concat_path, 'w') as cf:
+                                                    for sf in seg_files:
+                                                        cf.write(f"file '{sf}'\n")
+                                                ffmpeg_cmd = [
+                                                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                                                    "-i", concat_path, "-c", "copy", output_path
+                                                ]
+                                                log.info(f"Manual ffmpeg mux: {len(seg_files)} segments -> {output_path}")
+                                                ff_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=600)
+                                                if ff_result.returncode == 0 and os.path.exists(output_path):
+                                                    final_size = os.path.getsize(output_path)
+                                                    self.status_queue.put({"status": "finished", "filename": output_path})
+                                                    log.info(f"Manual ffmpeg mux succeeded: {output_path} ({final_size // (1024*1024)} MB)")
+                                                    # Clean up segment folder
+                                                    shutil.rmtree(seg_dir, ignore_errors=True)
+                                                else:
+                                                    log.error(f"Manual ffmpeg mux failed (code {ff_result.returncode}): {ff_result.stderr.decode(errors='replace')[-500:]}")
+                                                    self.status_queue.put({"status": "error", "msg": "Download finished but muxing failed"})
+                                            except Exception as e:
+                                                log.error(f"Manual ffmpeg mux exception: {e}")
+                                                self.status_queue.put({"status": "error", "msg": f"Mux fallback failed: {e}"})
+                                        else:
+                                            log.error(f"Segment folder exists but no media files found: {seg_dir}")
+                                            self.status_queue.put({"status": "error", "msg": "Download finished but no segments to mux"})
+                                    else:
+                                        log.error(f"N_m3u8DL-RE exited OK but output not found: {output_path}")
+                                        self.status_queue.put({"status": "error", "msg": "Download finished but output file not found"})
                             else:
                                 log.error(f"N_m3u8DL-RE failed with code {ret}")
                                 self.status_queue.put({"status": "error", "msg": f"N_m3u8DL-RE failed with code {ret}"})
