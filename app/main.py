@@ -137,6 +137,7 @@ config = Config()
 # overridden by config file settings or differs from the environment variable.
 logging.getLogger().setLevel(parseLogLevel(str(config.LOGLEVEL)) or logging.INFO)
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
+logging.getLogger("aiohttp.server").setLevel(logging.WARNING)
 
 class ObjectSerializer(json.JSONEncoder):
     def default(self, obj):

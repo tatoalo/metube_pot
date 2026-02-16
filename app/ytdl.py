@@ -240,7 +240,7 @@ class Download:
                         log.info(f"Got fresh m3u8 URL: {m3u8_url[:80]}...")
 
                         # Compute output filename
-                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', self.info.title)
+                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', self.info.title).strip('. ')
                         output_path = os.path.join(self.download_dir, f"{safe_title}.mp4")
                         info_json_path = os.path.join(self.download_dir, f"{safe_title}.info.json")
 
