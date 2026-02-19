@@ -70,35 +70,59 @@ jobs:
           CURRENT_VERSION: ${{ steps.update.outputs.current_version }}
           LATEST_VERSION: ${{ steps.update.outputs.latest_version }}
         run: |
-          BRANCH="auto/update-yt-dlp-nightly-$(date +%Y%m%d)"
-
-          # Check if branch already exists
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "Branch $BRANCH already exists, skipping"
-            exit 0
-          fi
+          BRANCH="auto/update-yt-dlp-nightly-${LATEST_VERSION}"
 
           # Configure git
-          git config --global user.email "updater@metube"
-          git config --global user.name "AutoUpdater"
+          git config user.email "updater@metube"
+          git config user.name "AutoUpdater"
 
-          # Create branch and commit
-          git checkout -b "$BRANCH"
+          # Reuse branch if it already exists (for retries), otherwise create it
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists, reusing it"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          # Commit only when there are changes
           git add Dockerfile
-          git commit -m "upgrade yt-dlp nightly to $LATEST_VERSION"
-          git push -u origin "$BRANCH"
+          if ! git diff --cached --quiet; then
+            git commit -m "upgrade yt-dlp nightly to $LATEST_VERSION"
+            git push -u origin "$BRANCH"
+          else
+            echo "No new Dockerfile changes to commit"
+            git push -u origin "$BRANCH"
+          fi
 
-          # Create PR and enable auto-merge
-          PR_URL=$(gh pr create \
+          # Reuse open PR if present, otherwise create one
+          PR_URL=$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Upgrade yt-dlp nightly to $LATEST_VERSION" \
-            --body "## Summary
+            --state open \
+            --head "$BRANCH" \
+            --json url \
+            --jq '.[0].url')
+
+          if [ -z "$PR_URL" ]; then
+            LABEL_ARGS=()
+            if gh api "repos/$GITHUB_REPOSITORY/labels/automated" >/dev/null 2>&1; then
+              LABEL_ARGS=(--label "automated")
+            else
+              echo "Label 'automated' not found; creating PR without label"
+            fi
+
+            PR_URL=$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Upgrade yt-dlp nightly to $LATEST_VERSION" \
+              --body "## Summary
           - Automated yt-dlp nightly update
           - Version: $CURRENT_VERSION -> $LATEST_VERSION
 
           ---
           *This PR was automatically created by the update-yt-dlp workflow.*" \
-            --label "auto-update")
+              "${LABEL_ARGS[@]}")
+          fi
 
           gh pr merge "$PR_URL" --auto --squash
 
@@ -117,7 +141,7 @@ jobs:
             echo "**Current version**: $CURRENT_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "**Latest version**: $LATEST_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "A pull request has been created with auto-merge enabled." >> $GITHUB_STEP_SUMMARY
+            echo "A pull request has been created or updated with auto-merge enabled." >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status**: Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
