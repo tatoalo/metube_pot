@@ -93,6 +93,8 @@ def get_opts(format: str, quality: str, ytdl_opts: dict) -> dict:
             postprocessors.append({"key": "FFmpegMetadata"})
             postprocessors.append({"key": "EmbedThumbnail"})
 
+    late_postprocessors = []
+
     if format == "mp4" and quality == "best_remux":
         # Remove any custom format string from ytdl_opts so it doesn't
         # override get_format()'s "bestvideo+bestaudio/best" via **opts spread
@@ -102,6 +104,14 @@ def get_opts(format: str, quality: str, ytdl_opts: dict) -> dict:
             {
                 "key": "FFmpegVideoConvertor",
                 "preferedformat": "mp4",
+            }
+        )
+        # Re-encode audio to AAC after SponsorBlock cutting to fix A/V desync
+        # caused by keyframe-misaligned stream-copy cuts
+        late_postprocessors.append(
+            {
+                "key": "Exec",
+                "exec_cmd": "python3 /app/app/audio_sync_fix.py %(filepath)q",
             }
         )
 
@@ -114,5 +124,5 @@ def get_opts(format: str, quality: str, ytdl_opts: dict) -> dict:
 
     opts["postprocessors"] = postprocessors + (
         opts["postprocessors"] if "postprocessors" in opts else []
-    )
+    ) + late_postprocessors
     return opts
