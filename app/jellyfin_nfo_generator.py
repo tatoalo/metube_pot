@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from xml.dom import minidom
 from xml.etree.ElementTree import Element, SubElement, tostring
 
@@ -98,6 +99,8 @@ def create_nfo_xml(info: dict) -> str:
         SubElement(root, "year").text = year
     if premiered:
         SubElement(root, "premiered").text = premiered
+
+    SubElement(root, "dateadded").text = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     uploader = info.get("uploader", info.get("channel", ""))
     if uploader:
