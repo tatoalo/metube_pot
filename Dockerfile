@@ -33,7 +33,7 @@ RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
     rm /tmp/n_m3u8dl.tar.gz
 
 # Install nightly yt-dlp (override stable version from uv sync)
-RUN pip install --break-system-packages --no-deps yt-dlp==2026.3.17.232108.dev0
+RUN pip install --break-system-packages --no-deps yt-dlp==2026.3.21.233500.dev0
 
 COPY app ./app
 COPY ui/src/formats.json ./app/formats.json
