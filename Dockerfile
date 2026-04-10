@@ -33,9 +33,7 @@ RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
     rm /tmp/n_m3u8dl.tar.gz
 
 # Install nightly yt-dlp (override stable version from uv sync)
-# Also install yt-dlp-ejs>=0.8.0 for JS challenge solving (uv.lock pins an older version)
-RUN pip install --break-system-packages --no-deps yt-dlp==2026.4.7.233742.dev0 && \
-    pip install --break-system-packages yt-dlp-ejs>=0.8.0
+RUN pip install --break-system-packages --no-deps yt-dlp==2026.4.7.233742.dev0
 
 COPY app ./app
 COPY ui/src/formats.json ./app/formats.json
