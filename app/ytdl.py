@@ -1068,6 +1068,13 @@ class DownloadQueue:
         return opts
 
     def __extract_info(self, url, ytdl_options_presets=None, ytdl_options_overrides=None):
+        from extractors.streamingcommunity import StreamingCommunityExtractor
+
+        if StreamingCommunityExtractor.can_extract(url):
+            entry = StreamingCommunityExtractor.extract_info(url)
+            if entry:
+                return entry
+
         debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
         user_opts = self._build_ytdl_options(ytdl_options_presets, ytdl_options_overrides)
         params = {

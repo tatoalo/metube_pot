@@ -351,3 +351,43 @@ async def test_extract_info_metube_extract_keys_win_over_preset(dq_env):
     assert result["status"] == "ok"
     assert captured_params[0]["extract_flat"] is True
     assert captured_params[0]["noplaylist"] is True
+
+
+@pytest.mark.asyncio
+async def test_streamingcommunity_urls_use_custom_extractor_before_ytdlp(dq_env):
+    """StreamingCommunity is handled by the fork extractor; yt-dlp does not support it."""
+    url = "https://streamingcommunityz.ooo/it/watch/6119?e=39896"
+    entry = {
+        "_type": "video",
+        "id": "sc_6119_39896",
+        "title": "La legge di Lidia Poet S01E01 - Episodio 1",
+        "url": url,
+        "webpage_url": url,
+        "extractor": "streamingcommunity",
+        "_sc_needs_m3u8_extraction": True,
+        "_sc_base_url": "https://streamingcommunityz.ooo",
+    }
+
+    notifier = AsyncMock()
+    dq = DownloadQueue(dq_env, notifier)
+
+    with (
+        patch("extractors.streamingcommunity.StreamingCommunityExtractor.can_extract", return_value=True),
+        patch("extractors.streamingcommunity.StreamingCommunityExtractor.extract_info", return_value=entry),
+        patch("ytdl.yt_dlp.YoutubeDL", side_effect=AssertionError("yt-dlp should not be called")),
+    ):
+        result = await dq.add(
+            url,
+            "video",
+            "auto",
+            "mp4",
+            "best",
+            "",
+            "",
+            0,
+            auto_start=False,
+        )
+
+    assert result["status"] == "ok"
+    queued = dq.pending.get(url)
+    assert queued.info.entry["extractor"] == "streamingcommunity"
