@@ -11,6 +11,7 @@ docker-compose.yml
 
 # dependencies
 /ui/node_modules
+/ui/package-lock.json
 
 # profiling files
 chrome-profiler-events*.json
