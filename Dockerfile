@@ -54,7 +54,7 @@ RUN BGUTIL_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com
     PLUGIN_DIR="$(python3 -c 'import site; print(site.getsitepackages()[0])')" && \
     curl -L -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
       "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-ytdlp-pot-provider-rs.zip" && \
-    unzip -q /tmp/bgutil-ytdlp-pot-provider-rs.zip -d "${PLUGIN_DIR}" && \
+    unzip -oq /tmp/bgutil-ytdlp-pot-provider-rs.zip -d "${PLUGIN_DIR}" && \
     rm /tmp/bgutil-ytdlp-pot-provider-rs.zip
 
 # Install N_m3u8DL-RE for StreamingCommunity HLS downloads.
