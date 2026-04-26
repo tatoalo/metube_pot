@@ -580,12 +580,17 @@ class Download:
                 return value * 1024 * 1024 * 1024
             return value
 
-        process = subprocess.Popen(
-            nm3u8_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
+        try:
+            process = subprocess.Popen(
+                nm3u8_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+            )
+        except OSError as exc:
+            log.error(f"Could not start N_m3u8DL-RE: {exc}")
+            self.status_queue.put({"status": "error", "msg": f"Could not start N_m3u8DL-RE: {exc}"})
+            return 1
 
         last_update = time.time()
         for raw_line in process.stdout:
@@ -740,6 +745,9 @@ class Download:
             log.info(f"Finished download for: {self.info.title}")
         except yt_dlp.utils.YoutubeDLError as exc:
             log.error(f"Download error for {self.info.title}: {str(exc)}")
+            self.status_queue.put({'status': 'error', 'msg': str(exc)})
+        except Exception as exc:
+            log.exception(f"Unexpected download error for {self.info.title}")
             self.status_queue.put({'status': 'error', 'msg': str(exc)})
 
     async def start(self, notifier):

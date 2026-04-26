@@ -28,6 +28,7 @@ RUN sed -i 's/\r$//g' docker-entrypoint.sh && \
       file \
       gdbmtool \
       sqlite3 \
+      musl \
       tini \
       libstdc++6 \
       build-essential && \
