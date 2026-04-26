@@ -365,6 +365,10 @@ class StreamingCommunityDownloadTests(unittest.TestCase):
             self.assertEqual(dl._download_streamingcommunity(), 0)
 
         nm3u8.assert_called_once()
+        self.assertIn(
+            {"status": "downloading", "msg": "Starting N_m3u8DL-RE download..."},
+            dl.status_queue.items,
+        )
 
     def test_streamingcommunity_can_force_ffmpeg(self):
         dl = self._download()
@@ -383,6 +387,10 @@ class StreamingCommunityDownloadTests(unittest.TestCase):
             self.assertEqual(dl._download_streamingcommunity(), 0)
 
         ffmpeg.assert_called_once()
+        self.assertIn(
+            {"status": "downloading", "msg": "Starting ffmpeg download..."},
+            dl.status_queue.items,
+        )
 
     def test_streamingcommunity_nm3u8_falls_back_to_ffmpeg(self):
         dl = self._download()

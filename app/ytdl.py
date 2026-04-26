@@ -448,11 +448,12 @@ class Download:
         except OSError as exc:
             log.warning(f"Failed to write info.json: {exc}")
 
-        self.status_queue.put({"status": "downloading", "msg": "Starting download..."})
         use_ffmpeg = os.environ.get("SC_USE_FFMPEG", "false").lower() in ("true", "1", "on")
         if use_ffmpeg:
+            self.status_queue.put({"status": "downloading", "msg": "Starting ffmpeg download..."})
             return self._download_streamingcommunity_ffmpeg(m3u8_url, http_headers, cookies, output_path)
 
+        self.status_queue.put({"status": "downloading", "msg": "Starting N_m3u8DL-RE download..."})
         ret = self._download_streamingcommunity_nm3u8(
             m3u8_url,
             http_headers,
@@ -586,6 +587,7 @@ class Download:
     def _download_streamingcommunity_nm3u8(self, m3u8_url, http_headers, cookies, safe_title, output_path, report_error=True):
         thread_count = os.environ.get("SC_THREAD_COUNT", "16")
         temp_dir = self.temp_dir or os.path.join(self.download_dir, ".tmp")
+        log.info(f"Running N_m3u8DL-RE for StreamingCommunity download: {self.info.title} (threads={thread_count})")
         nm3u8_cmd = [
             "N_m3u8DL-RE", m3u8_url,
             "--save-dir", self.download_dir,
