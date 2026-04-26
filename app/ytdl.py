@@ -449,10 +449,25 @@ class Download:
             log.warning(f"Failed to write info.json: {exc}")
 
         self.status_queue.put({"status": "downloading", "msg": "Starting download..."})
-        use_ffmpeg = os.environ.get("SC_USE_FFMPEG", "false").lower() in ("true", "1", "on")
+        use_ffmpeg = os.environ.get("SC_USE_FFMPEG", "true").lower() in ("true", "1", "on")
         if use_ffmpeg:
             return self._download_streamingcommunity_ffmpeg(m3u8_url, http_headers, cookies, output_path)
-        return self._download_streamingcommunity_nm3u8(m3u8_url, http_headers, cookies, safe_title, output_path)
+
+        ret = self._download_streamingcommunity_nm3u8(
+            m3u8_url,
+            http_headers,
+            cookies,
+            safe_title,
+            output_path,
+            report_error=False,
+        )
+        if ret == 0:
+            return 0
+
+        log.warning("N_m3u8DL-RE failed; retrying StreamingCommunity download with ffmpeg")
+        self.status_queue.put({"status": "downloading", "msg": "N_m3u8DL-RE failed, retrying with ffmpeg..."})
+        self._cleanup_streamingcommunity_partial(output_path, safe_title)
+        return self._download_streamingcommunity_ffmpeg(m3u8_url, http_headers, cookies, output_path)
 
     def _download_streamingcommunity_ffmpeg(self, m3u8_url, http_headers, cookies, output_path):
         log.info(f"Running ffmpeg for StreamingCommunity download: {self.info.title}")
@@ -488,12 +503,17 @@ class Download:
             "-progress", "pipe:1",
             output_path,
         ]
-        process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-        )
+        try:
+            process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+        except OSError as exc:
+            log.error(f"Could not start ffmpeg: {exc}")
+            self.status_queue.put({"status": "error", "msg": f"Could not start ffmpeg: {exc}"})
+            return 1
 
         stderr_lines = []
 
@@ -541,10 +561,29 @@ class Download:
             return 0
         stderr_tail = "".join(stderr_lines[-20:])
         log.error(f"FFmpeg failed with code {process.returncode}, stderr:\n{stderr_tail}")
-        self.status_queue.put({"status": "error", "msg": f"FFmpeg failed with code {process.returncode}"})
+        msg = f"FFmpeg failed with code {process.returncode}"
+        if stderr_tail.strip():
+            msg += f": {stderr_tail.strip()[-500:]}"
+        self.status_queue.put({"status": "error", "msg": msg})
         return process.returncode or 1
 
-    def _download_streamingcommunity_nm3u8(self, m3u8_url, http_headers, cookies, safe_title, output_path):
+    def _cleanup_streamingcommunity_partial(self, output_path, safe_title):
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError as exc:
+            log.debug(f"Could not remove partial StreamingCommunity output {output_path}: {exc}")
+
+        temp_dir = self.temp_dir or os.path.join(self.download_dir, ".tmp")
+        for path in (
+            os.path.join(temp_dir, safe_title),
+            os.path.join(temp_dir, f"{safe_title}.tmp"),
+            os.path.join(self.download_dir, safe_title),
+        ):
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+
+    def _download_streamingcommunity_nm3u8(self, m3u8_url, http_headers, cookies, safe_title, output_path, report_error=True):
         thread_count = os.environ.get("SC_THREAD_COUNT", "16")
         temp_dir = self.temp_dir or os.path.join(self.download_dir, ".tmp")
         nm3u8_cmd = [
@@ -580,6 +619,7 @@ class Download:
                 return value * 1024 * 1024 * 1024
             return value
 
+        output_lines = []
         try:
             process = subprocess.Popen(
                 nm3u8_cmd,
@@ -589,12 +629,16 @@ class Download:
             )
         except OSError as exc:
             log.error(f"Could not start N_m3u8DL-RE: {exc}")
-            self.status_queue.put({"status": "error", "msg": f"Could not start N_m3u8DL-RE: {exc}"})
+            if report_error:
+                self.status_queue.put({"status": "error", "msg": f"Could not start N_m3u8DL-RE: {exc}"})
             return 1
 
         last_update = time.time()
         for raw_line in process.stdout:
             line = ansi_re.sub("", raw_line).strip()
+            if line:
+                output_lines.append(line)
+                output_lines = output_lines[-30:]
             if not line or time.time() - last_update < 0.5:
                 continue
             last_update = time.time()
@@ -619,8 +663,13 @@ class Download:
 
         process.wait()
         if process.returncode != 0:
-            log.error(f"N_m3u8DL-RE failed with code {process.returncode}")
-            self.status_queue.put({"status": "error", "msg": f"N_m3u8DL-RE failed with code {process.returncode}"})
+            output_tail = "\n".join(output_lines[-20:])
+            log.error(f"N_m3u8DL-RE failed with code {process.returncode}, output:\n{output_tail}")
+            if report_error:
+                msg = f"N_m3u8DL-RE failed with code {process.returncode}"
+                if output_tail.strip():
+                    msg += f": {output_tail.strip()[-500:]}"
+                self.status_queue.put({"status": "error", "msg": msg})
             return process.returncode or 1
 
         final_path = output_path if os.path.exists(output_path) else None
@@ -741,7 +790,9 @@ class Download:
             ret = self._download_streamingcommunity()
             if ret is None:
                 ret = yt_dlp.YoutubeDL(params=ytdl_params).download([self.info.url])
-            self.status_queue.put({'status': 'finished' if ret == 0 else 'error'})
+                self.status_queue.put({'status': 'finished' if ret == 0 else 'error'})
+            elif ret == 0:
+                self.status_queue.put({'status': 'finished'})
             log.info(f"Finished download for: {self.info.title}")
         except yt_dlp.utils.YoutubeDLError as exc:
             log.error(f"Download error for {self.info.title}: {str(exc)}")
@@ -1332,6 +1383,9 @@ class DownloadQueue:
                 partial(self.__extract_info, url, ytdl_options_presets, ytdl_options_overrides),
             )
         except yt_dlp.utils.YoutubeDLError as exc:
+            return {'status': 'error', 'msg': str(exc)}
+        except Exception as exc:
+            log.exception(f'Unexpected error while extracting {url}')
             return {'status': 'error', 'msg': str(exc)}
         return await self.__add_entry(
             entry,

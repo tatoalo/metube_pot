@@ -9,6 +9,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 fake_yt_dlp = types.ModuleType("yt_dlp")
 fake_networking = types.ModuleType("yt_dlp.networking")
@@ -37,6 +38,7 @@ sys.modules.setdefault("yt_dlp.networking.impersonate", fake_impersonate)
 sys.modules.setdefault("yt_dlp.utils", fake_utils)
 
 from ytdl import (
+    Download,
     DownloadInfo,
     _compact_persisted_entry,
     _convert_srt_to_txt_file,
@@ -319,6 +321,73 @@ class CompactPersistedEntryTests(unittest.TestCase):
         }
 
         self.assertEqual(_compact_persisted_entry(entry), entry)
+
+
+class _ListStatusQueue:
+    def __init__(self):
+        self.items = []
+
+    def put(self, item):
+        self.items.append(item)
+
+
+class StreamingCommunityDownloadTests(unittest.TestCase):
+    def _download(self):
+        dl = Download.__new__(Download)
+        dl.info = types.SimpleNamespace(
+            title="SC Episode",
+            url="https://streamingcommunityz.ooo/it/watch/6119?e=39896",
+            entry={
+                "extractor": "streamingcommunity",
+                "_sc_needs_m3u8_extraction": True,
+                "_sc_base_url": "https://streamingcommunityz.ooo",
+            },
+        )
+        dl.download_dir = tempfile.mkdtemp()
+        dl.temp_dir = dl.download_dir
+        dl.status_queue = _ListStatusQueue()
+        return dl
+
+    def test_streamingcommunity_defaults_to_ffmpeg(self):
+        dl = self._download()
+        fresh = {
+            "m3u8_url": "https://vixcloud.example/playlist.m3u8",
+            "http_headers": {"User-Agent": "UA", "Referer": "R", "Origin": "O"},
+            "cookies": "",
+        }
+
+        with (
+            patch("extractors.streamingcommunity.StreamingCommunityExtractor.get_fresh_m3u8", return_value=fresh),
+            patch.object(Download, "_download_streamingcommunity_ffmpeg", return_value=0) as ffmpeg,
+            patch.object(Download, "_download_streamingcommunity_nm3u8", side_effect=AssertionError("N_m3u8DL should not run")),
+        ):
+            self.assertEqual(dl._download_streamingcommunity(), 0)
+
+        ffmpeg.assert_called_once()
+
+    def test_streamingcommunity_nm3u8_falls_back_to_ffmpeg(self):
+        dl = self._download()
+        fresh = {
+            "m3u8_url": "https://vixcloud.example/playlist.m3u8",
+            "http_headers": {"User-Agent": "UA", "Referer": "R", "Origin": "O"},
+            "cookies": "",
+        }
+
+        with (
+            patch.dict("os.environ", {"SC_USE_FFMPEG": "false"}),
+            patch("extractors.streamingcommunity.StreamingCommunityExtractor.get_fresh_m3u8", return_value=fresh),
+            patch.object(Download, "_download_streamingcommunity_nm3u8", return_value=1) as nm3u8,
+            patch.object(Download, "_download_streamingcommunity_ffmpeg", return_value=0) as ffmpeg,
+        ):
+            self.assertEqual(dl._download_streamingcommunity(), 0)
+
+        nm3u8.assert_called_once()
+        self.assertFalse(nm3u8.call_args.kwargs["report_error"])
+        ffmpeg.assert_called_once()
+        self.assertIn(
+            {"status": "downloading", "msg": "N_m3u8DL-RE failed, retrying with ffmpeg..."},
+            dl.status_queue.items,
+        )
 
 
 if __name__ == "__main__":

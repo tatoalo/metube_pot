@@ -354,6 +354,28 @@ async def test_extract_info_metube_extract_keys_win_over_preset(dq_env):
 
 
 @pytest.mark.asyncio
+async def test_add_returns_error_for_unexpected_extract_failure(dq_env):
+    """Plugin/runtime crashes during extraction should not bubble up as HTTP 500s."""
+    notifier = AsyncMock()
+    dq = DownloadQueue(dq_env, notifier)
+
+    with patch.object(DownloadQueue, "_DownloadQueue__extract_info", side_effect=AttributeError("plugin broke")):
+        result = await dq.add(
+            "https://example.com/broken-plugin",
+            "video",
+            "auto",
+            "any",
+            "best",
+            "",
+            "",
+            0,
+            auto_start=False,
+        )
+
+    assert result == {"status": "error", "msg": "plugin broke"}
+
+
+@pytest.mark.asyncio
 async def test_streamingcommunity_urls_use_custom_extractor_before_ytdlp(dq_env):
     """StreamingCommunity is handled by the fork extractor; yt-dlp does not support it."""
     url = "https://streamingcommunityz.ooo/it/watch/6119?e=39896"

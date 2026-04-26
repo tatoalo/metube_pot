@@ -80,6 +80,7 @@ ENV DOWNLOAD_DIR=/downloads
 ENV STATE_DIR=/downloads/.metube
 ENV TEMP_DIR=/downloads
 ENV PORT=8081
+ENV SC_USE_FFMPEG=true
 VOLUME /downloads
 EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS "http://localhost:${PORT}/" || exit 1

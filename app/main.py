@@ -74,7 +74,7 @@ class Config:
         'LOGLEVEL': 'INFO',
         'ENABLE_ACCESSLOG': 'false',
         'SC_THREAD_COUNT': '16',
-        'SC_USE_FFMPEG': 'false',
+        'SC_USE_FFMPEG': 'true',
         'TELEGRAM_BOT_ENABLED': 'false',
         'TELEGRAM_STALL_TIMEOUT_SECONDS': '180',
         'TELEGRAM_HARD_TIMEOUT_SECONDS': '7200',
