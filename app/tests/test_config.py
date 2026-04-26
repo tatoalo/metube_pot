@@ -107,10 +107,10 @@ class ConfigTests(unittest.TestCase):
             c = Config()
         self.assertTrue(c.ALLOW_YTDL_OPTIONS_OVERRIDES)
 
-    def test_streamingcommunity_ffmpeg_default_enabled(self):
+    def test_streamingcommunity_ffmpeg_default_disabled(self):
         with patch.dict(os.environ, _base_env(), clear=False):
             c = Config()
-        self.assertTrue(c.SC_USE_FFMPEG)
+        self.assertFalse(c.SC_USE_FFMPEG)
 
     def test_runtime_override_roundtrip(self):
         with patch.dict(os.environ, _base_env(), clear=False):

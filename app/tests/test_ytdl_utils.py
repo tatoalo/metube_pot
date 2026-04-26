@@ -348,7 +348,7 @@ class StreamingCommunityDownloadTests(unittest.TestCase):
         dl.status_queue = _ListStatusQueue()
         return dl
 
-    def test_streamingcommunity_defaults_to_ffmpeg(self):
+    def test_streamingcommunity_defaults_to_nm3u8(self):
         dl = self._download()
         fresh = {
             "m3u8_url": "https://vixcloud.example/playlist.m3u8",
@@ -357,6 +357,25 @@ class StreamingCommunityDownloadTests(unittest.TestCase):
         }
 
         with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("extractors.streamingcommunity.StreamingCommunityExtractor.get_fresh_m3u8", return_value=fresh),
+            patch.object(Download, "_download_streamingcommunity_nm3u8", return_value=0) as nm3u8,
+            patch.object(Download, "_download_streamingcommunity_ffmpeg", side_effect=AssertionError("ffmpeg should not run")),
+        ):
+            self.assertEqual(dl._download_streamingcommunity(), 0)
+
+        nm3u8.assert_called_once()
+
+    def test_streamingcommunity_can_force_ffmpeg(self):
+        dl = self._download()
+        fresh = {
+            "m3u8_url": "https://vixcloud.example/playlist.m3u8",
+            "http_headers": {"User-Agent": "UA", "Referer": "R", "Origin": "O"},
+            "cookies": "",
+        }
+
+        with (
+            patch.dict("os.environ", {"SC_USE_FFMPEG": "true"}),
             patch("extractors.streamingcommunity.StreamingCommunityExtractor.get_fresh_m3u8", return_value=fresh),
             patch.object(Download, "_download_streamingcommunity_ffmpeg", return_value=0) as ffmpeg,
             patch.object(Download, "_download_streamingcommunity_nm3u8", side_effect=AssertionError("N_m3u8DL should not run")),

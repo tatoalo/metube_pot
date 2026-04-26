@@ -28,7 +28,7 @@ RUN sed -i 's/\r$//g' docker-entrypoint.sh && \
       file \
       gdbmtool \
       sqlite3 \
-      musl \
+      libssl3t64 \
       tini \
       libstdc++6 \
       build-essential && \
@@ -60,7 +60,7 @@ RUN BGUTIL_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com
 
 # Install N_m3u8DL-RE for StreamingCommunity HLS downloads.
 RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
-    curl -L "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.5.1-beta/N_m3u8DL-RE_v0.5.1-beta_linux-musl-${ARCH}_20251029.tar.gz" \
+    curl -L "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.5.1-beta/N_m3u8DL-RE_v0.5.1-beta_linux-${ARCH}_20251029.tar.gz" \
     -o /tmp/n_m3u8dl.tar.gz && \
     tar -xzf /tmp/n_m3u8dl.tar.gz -C /usr/local/bin && \
     chmod +x /usr/local/bin/N_m3u8DL-RE && \
@@ -80,7 +80,8 @@ ENV DOWNLOAD_DIR=/downloads
 ENV STATE_DIR=/downloads/.metube
 ENV TEMP_DIR=/downloads
 ENV PORT=8081
-ENV SC_USE_FFMPEG=true
+ENV SC_USE_FFMPEG=false
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 VOLUME /downloads
 EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS "http://localhost:${PORT}/" || exit 1

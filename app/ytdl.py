@@ -449,7 +449,7 @@ class Download:
             log.warning(f"Failed to write info.json: {exc}")
 
         self.status_queue.put({"status": "downloading", "msg": "Starting download..."})
-        use_ffmpeg = os.environ.get("SC_USE_FFMPEG", "true").lower() in ("true", "1", "on")
+        use_ffmpeg = os.environ.get("SC_USE_FFMPEG", "false").lower() in ("true", "1", "on")
         if use_ffmpeg:
             return self._download_streamingcommunity_ffmpeg(m3u8_url, http_headers, cookies, output_path)
 
@@ -594,6 +594,7 @@ class Download:
             "--thread-count", thread_count,
             "--auto-select",
             "--del-after-done",
+            "--no-log",
             "--mux-after-done", "format=mp4:muxer=ffmpeg",
             "--log-level", "INFO",
             "-H", f"User-Agent: {http_headers.get('User-Agent', '')}",
