@@ -866,12 +866,12 @@ async def cookie_status(request):
 async def history(request):
     history = { 'done': [], 'queue': [], 'pending': []}
 
-    for _, v in dqueue.queue.saved_items():
-        history['queue'].append(v)
-    for _, v in dqueue.done.saved_items():
-        history['done'].append(v)
-    for _, v in dqueue.pending.saved_items():
-        history['pending'].append(v)
+    for _, v in dqueue.queue.items():
+        history['queue'].append(v.info)
+    for _, v in dqueue.done.items():
+        history['done'].append(v.info)
+    for _, v in dqueue.pending.items():
+        history['pending'].append(v.info)
 
     log.info("Sending download history")
     return web.Response(text=serializer.encode(history))

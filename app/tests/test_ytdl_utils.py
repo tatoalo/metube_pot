@@ -40,6 +40,7 @@ sys.modules.setdefault("yt_dlp.utils", fake_utils)
 from ytdl import (
     Download,
     DownloadInfo,
+    _calculate_progress_percent,
     _compact_persisted_entry,
     _convert_srt_to_txt_file,
     _resolve_outtmpl_fields,
@@ -181,6 +182,44 @@ Second line
             content = Path(txt_path).read_text(encoding="utf-8")
             self.assertIn("Hello world", content)
             self.assertIn("Second line", content)
+
+
+class ProgressPercentTests(unittest.TestCase):
+    def test_fragment_progress_caps_false_initial_hls_estimate(self):
+        percent = _calculate_progress_percent({
+            "status": "downloading",
+            "downloaded_bytes": 1024,
+            "total_bytes_estimate": 1024,
+            "fragment_index": 0,
+            "fragment_count": 463,
+        })
+
+        self.assertGreater(percent, 0)
+        self.assertLess(percent, 1)
+
+    def test_fragment_progress_is_monotonic_for_same_source(self):
+        previous = 0.65
+        percent = _calculate_progress_percent({
+            "status": "downloading",
+            "downloaded_bytes": 253048,
+            "total_bytes_estimate": 234322448,
+            "fragment_index": 1,
+            "fragment_count": 463,
+        }, previous)
+
+        self.assertEqual(percent, previous)
+
+    def test_exact_byte_progress_is_clamped_below_finished(self):
+        percent = _calculate_progress_percent({
+            "status": "downloading",
+            "downloaded_bytes": 100,
+            "total_bytes": 100,
+        })
+
+        self.assertEqual(percent, 99.9)
+
+    def test_finished_progress_is_complete(self):
+        self.assertEqual(_calculate_progress_percent({"status": "finished"}), 100.0)
 
 
 class DownloadInfoSetstateTests(unittest.TestCase):

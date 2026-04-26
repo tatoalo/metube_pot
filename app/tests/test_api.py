@@ -25,6 +25,9 @@ def mock_dqueue(monkeypatch):
     d.queue.saved_items = MagicMock(return_value=[])
     d.done.saved_items = MagicMock(return_value=[])
     d.pending.saved_items = MagicMock(return_value=[])
+    d.queue.items = MagicMock(return_value=[])
+    d.done.items = MagicMock(return_value=[])
+    d.pending.items = MagicMock(return_value=[])
     d.get = MagicMock(return_value=([], []))
     monkeypatch.setattr(main, "dqueue", d)
     return d
@@ -214,9 +217,9 @@ async def test_start_pending(mock_dqueue):
 
 @pytest.mark.asyncio
 async def test_history_shape(mock_dqueue):
-    mock_dqueue.queue.saved_items.return_value = []
-    mock_dqueue.done.saved_items.return_value = []
-    mock_dqueue.pending.saved_items.return_value = []
+    mock_dqueue.queue.items.return_value = []
+    mock_dqueue.done.items.return_value = []
+    mock_dqueue.pending.items.return_value = []
     req = MagicMock(spec=web.Request)
     resp = await main.history(req)
     assert resp.status == 200

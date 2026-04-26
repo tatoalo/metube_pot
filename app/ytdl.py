@@ -49,6 +49,61 @@ def _sanitize_path_component(value: Any) -> Any:
     return _WINDOWS_INVALID_PATH_CHARS.sub('_', value)
 
 
+def _number(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _calculate_progress_percent(status: dict[str, Any], previous_percent: Optional[float] = None) -> Optional[float]:
+    """Calculate a UI-safe progress percentage from yt-dlp/downloader status.
+
+    yt-dlp's ``total_bytes_estimate`` can briefly equal ``downloaded_bytes`` at
+    the beginning of HLS downloads, causing a false 100% update. Fragment counts
+    give a more stable bound, so use them to cap estimate-based progress while
+    keeping active downloads below 100 until the final finished status arrives.
+    """
+    if status.get("status") == "finished":
+        return 100.0
+
+    downloaded = _number(status.get("downloaded_bytes"))
+    exact_total = _number(status.get("total_bytes"))
+    estimate_total = _number(status.get("total_bytes_estimate"))
+    fragment_index = _number(status.get("fragment_index"))
+    fragment_count = _number(status.get("fragment_count"))
+
+    percent = None
+    if downloaded is not None and exact_total and exact_total > 0:
+        percent = downloaded / exact_total * 100
+    else:
+        estimate_percent = None
+        if downloaded is not None and estimate_total and estimate_total > 0:
+            estimate_percent = downloaded / estimate_total * 100
+
+        if fragment_count and fragment_count > 0 and fragment_index is not None:
+            bounded_index = min(max(fragment_index, 0), fragment_count)
+            fragment_floor = bounded_index / fragment_count * 100
+            fragment_ceiling = min((bounded_index + 1) / fragment_count * 100, 99.9)
+            percent = fragment_floor
+            if estimate_percent is not None:
+                percent = min(max(estimate_percent, fragment_floor), fragment_ceiling)
+        elif estimate_percent is not None:
+            # Ignore the common early HLS estimate that reports 1 KiB / 1 KiB.
+            if not (downloaded is not None and estimate_total <= downloaded):
+                percent = estimate_percent
+
+    if percent is None:
+        return previous_percent
+
+    percent = max(0.0, min(percent, 99.9))
+    if previous_percent is not None and percent < previous_percent:
+        return previous_percent
+    return percent
+
+
 # Regex matching yt-dlp output-template field references, e.g. ``%(title)s``
 # or ``%(playlist_index)03d``.  Built from yt-dlp's own ``STR_FORMAT_RE_TMPL``
 # so that it stays in sync with upstream changes to the template syntax.
@@ -207,6 +262,11 @@ class DownloadInfo:
         self.folder = folder
         self.custom_name_prefix = custom_name_prefix
         self.msg = self.percent = self.speed = self.eta = None
+        self.downloaded_bytes = None
+        self.total_bytes = None
+        self.total_bytes_estimate = None
+        self.fragment_index = None
+        self.fragment_count = None
         self.status = "pending"
         self.size = None
         self.timestamp = time.time_ns()
@@ -288,6 +348,16 @@ class DownloadInfo:
             self.subtitle_files = []
         if not hasattr(self, "chapter_files"):
             self.chapter_files = []
+        if not hasattr(self, "downloaded_bytes"):
+            self.downloaded_bytes = None
+        if not hasattr(self, "total_bytes"):
+            self.total_bytes = None
+        if not hasattr(self, "total_bytes_estimate"):
+            self.total_bytes_estimate = None
+        if not hasattr(self, "fragment_index"):
+            self.fragment_index = None
+        if not hasattr(self, "fragment_count"):
+            self.fragment_count = None
 
 
 _PERSISTED_DOWNLOAD_FIELDS = (
@@ -408,6 +478,7 @@ class Download:
         self.proc = None
         self.loop = None
         self.notifier = None
+        self._progress_source = None
 
     def _download_streamingcommunity(self):
         is_streamingcommunity = (
@@ -733,6 +804,8 @@ class Download:
                     'total_bytes',
                     'total_bytes_estimate',
                     'downloaded_bytes',
+                    'fragment_index',
+                    'fragment_count',
                     'speed',
                     'eta',
                 )})
@@ -923,9 +996,23 @@ class Download:
             self.info.status = status['status']
             self.info.msg = status.get('msg')
             if 'downloaded_bytes' in status:
-                total = status.get('total_bytes') or status.get('total_bytes_estimate')
-                if total:
-                    self.info.percent = status['downloaded_bytes'] / total * 100
+                self.info.downloaded_bytes = status.get('downloaded_bytes')
+            if 'total_bytes' in status:
+                self.info.total_bytes = status.get('total_bytes')
+            if 'total_bytes_estimate' in status:
+                self.info.total_bytes_estimate = status.get('total_bytes_estimate')
+            if 'fragment_index' in status:
+                self.info.fragment_index = status.get('fragment_index')
+            if 'fragment_count' in status:
+                self.info.fragment_count = status.get('fragment_count')
+
+            progress_source = status.get('filename') or status.get('tmpfilename')
+            previous_percent = self.info.percent
+            if progress_source and getattr(self, '_progress_source', None) not in (None, progress_source):
+                previous_percent = None
+            if progress_source:
+                self._progress_source = progress_source
+            self.info.percent = _calculate_progress_percent(status, previous_percent)
             self.info.speed = status.get('speed')
             self.info.eta = status.get('eta')
             log.debug(f"Updating status for {self.info.title}: {status}")
