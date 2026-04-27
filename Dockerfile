@@ -3,10 +3,10 @@ FROM node:lts-alpine AS builder
 WORKDIR /metube
 COPY ui ./
 RUN corepack enable && corepack prepare pnpm --activate
-RUN pnpm install && pnpm run build
+RUN CI=true pnpm install && pnpm run build
 
 
-FROM python:3.13-alpine
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -16,41 +16,78 @@ COPY pyproject.toml uv.lock docker-entrypoint.sh ./
 # Install dependencies
 RUN sed -i 's/\r$//g' docker-entrypoint.sh && \
     chmod +x docker-entrypoint.sh && \
-    apk add --update ffmpeg aria2 coreutils shadow su-exec curl tini deno gdbm-tools sqlite file libstdc++ && \
-    apk add --update --virtual .build-deps gcc g++ musl-dev uv && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      ffmpeg \
+      unzip \
+      aria2 \
+      coreutils \
+      gosu \
+      curl \
+      file \
+      gdbmtool \
+      sqlite3 \
+      libssl3t64 \
+      tini \
+      libstdc++6 \
+      build-essential && \
+    curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \
     UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --no-dev --compile-bytecode && \
-    apk del .build-deps && \
-    rm -rf /var/cache/apk/* && \
+    uv cache clean && \
+    rm -f /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/uvw && \
+    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- -y && \
+    apt-get purge -y --auto-remove build-essential && \
+    rm -rf /var/lib/apt/lists/* && \
     mkdir /.cache && chmod 777 /.cache
 
-# Install N_m3u8DL-RE for HLS downloads (handles headers properly)
 ARG TARGETARCH
+
+RUN BGUTIL_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest | sed 's#.*/tag/##')" && \
+    case "$TARGETARCH" in \
+      amd64) BGUTIL_ARCH="x86_64" ;; \
+      arm64) BGUTIL_ARCH="aarch64" ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -L -o /usr/local/bin/bgutil-pot \
+      "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-pot-linux-${BGUTIL_ARCH}" && \
+    chmod +x /usr/local/bin/bgutil-pot && \
+    PLUGIN_DIR="$(python3 -c 'import site; print(site.getsitepackages()[0])')" && \
+    curl -L -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
+      "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-ytdlp-pot-provider-rs.zip" && \
+    unzip -oq /tmp/bgutil-ytdlp-pot-provider-rs.zip -d "${PLUGIN_DIR}" && \
+    rm /tmp/bgutil-ytdlp-pot-provider-rs.zip
+
+# Install N_m3u8DL-RE for StreamingCommunity HLS downloads.
 RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
-    curl -L "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.5.1-beta/N_m3u8DL-RE_v0.5.1-beta_linux-musl-${ARCH}_20251029.tar.gz" \
+    curl -L "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.5.1-beta/N_m3u8DL-RE_v0.5.1-beta_linux-${ARCH}_20251029.tar.gz" \
     -o /tmp/n_m3u8dl.tar.gz && \
     tar -xzf /tmp/n_m3u8dl.tar.gz -C /usr/local/bin && \
     chmod +x /usr/local/bin/N_m3u8DL-RE && \
     rm /tmp/n_m3u8dl.tar.gz
 
-# Install nightly yt-dlp (override stable version from uv sync)
+# Keep the fork's nightly yt-dlp cadence for YouTube/POT breakage fixes.
 RUN pip install --break-system-packages --no-deps yt-dlp==2026.4.10.235301.dev0
 
 COPY app ./app
-COPY ui/src/formats.json ./app/formats.json
 COPY --from=builder /metube/dist/metube ./ui/dist/metube
 
-ENV UID=1000
-ENV GID=1000
+ENV PUID=1000
+ENV PGID=1000
 ENV UMASK=022
 
-ENV DOWNLOAD_DIR /downloads
-ENV STATE_DIR /downloads/.metube
-ENV TEMP_DIR /downloads
+ENV DOWNLOAD_DIR=/downloads
+ENV STATE_DIR=/downloads/.metube
+ENV TEMP_DIR=/downloads
+ENV PORT=8081
+ENV SC_USE_FFMPEG=false
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 VOLUME /downloads
 EXPOSE 8081
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS "http://localhost:${PORT}/" || exit 1
 
 # Add build-time argument for version
 ARG VERSION=dev
 ENV METUBE_VERSION=$VERSION
 
-ENTRYPOINT ["/sbin/tini", "-g", "--", "./docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "./docker-entrypoint.sh"]

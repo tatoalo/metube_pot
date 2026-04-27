@@ -194,6 +194,10 @@ class TelegramBot:
         defaults = {
             "format": "mp4",
             "quality": "best",
+            "download_type": "video",
+            "codec": "auto",
+            "subtitle_language": "en",
+            "subtitle_mode": "prefer_manual",
             "folder": "",
             "custom_name_prefix": "",
             "playlist_item_limit": self.default_playlist_item_limit,
@@ -204,6 +208,27 @@ class TelegramBot:
         self._chat_config[key] = defaults
         self._save_config()
         return defaults
+
+    @staticmethod
+    def _normalize_download_selection(config: dict[str, Any]) -> dict[str, str]:
+        fmt = str(config.get("format") or "mp4").strip().lower()
+        quality = str(config.get("quality") or "best").strip().lower()
+        if fmt in {"m4a", "mp3", "opus", "wav", "flac"}:
+            return {"download_type": "audio", "codec": "auto", "format": fmt, "quality": quality}
+        if fmt == "thumbnail":
+            return {"download_type": "thumbnail", "codec": "auto", "format": "jpg", "quality": "best"}
+        if fmt == "captions":
+            return {"download_type": "captions", "codec": "auto", "format": "srt", "quality": "best"}
+        if quality == "audio":
+            return {"download_type": "audio", "codec": "auto", "format": "m4a", "quality": "best"}
+        if quality == "best_ios":
+            return {"download_type": "video", "codec": "auto", "format": "ios", "quality": "best"}
+        return {
+            "download_type": str(config.get("download_type") or "video").strip().lower(),
+            "codec": str(config.get("codec") or "auto").strip().lower(),
+            "format": fmt,
+            "quality": quality,
+        }
 
     def _load_config(self):
         if not self.config_path.exists():
@@ -481,6 +506,7 @@ class TelegramBot:
             return
 
         config = self._get_chat_config(chat_id)
+        selection = self._normalize_download_selection(config)
         queued_count = 0
         errors = []
         for url in valid_urls:
@@ -488,14 +514,20 @@ class TelegramBot:
             try:
                 status = await self.dqueue.add(
                     url,
-                    config["quality"],
-                    config["format"],
+                    selection["download_type"],
+                    selection["codec"],
+                    selection["format"],
+                    selection["quality"],
                     config["folder"],
                     config["custom_name_prefix"],
                     config["playlist_item_limit"],
                     config["auto_start"],
                     config["split_by_chapters"],
                     config["chapter_template"],
+                    config.get("subtitle_language", "en"),
+                    config.get("subtitle_mode", "prefer_manual"),
+                    [],
+                    {},
                 )
             finally:
                 self._current_chat_id.reset(token)
