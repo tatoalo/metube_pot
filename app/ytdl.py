@@ -1216,6 +1216,18 @@ class DownloadQueue:
         opts.update(ytdl_options_overrides or {})
         return opts
 
+    @staticmethod
+    def __needs_strict_extract_retry(entry):
+        if not isinstance(entry, dict):
+            return False
+        etype = entry.get('_type') or 'video'
+        if etype != 'video':
+            return False
+        formats = entry.get('formats')
+        if formats is None or formats:
+            return False
+        return bool(entry.get('id') or entry.get('url') or entry.get('webpage_url'))
+
     def __extract_info(self, url, ytdl_options_presets=None, ytdl_options_overrides=None):
         from extractors.streamingcommunity import StreamingCommunityExtractor
 
@@ -1239,7 +1251,15 @@ class DownloadQueue:
         imp = user_opts.get('impersonate')
         if imp is not None:
             params['impersonate'] = yt_dlp.networking.impersonate.ImpersonateTarget.from_str(imp)
-        return yt_dlp.YoutubeDL(params=params).extract_info(url, download=False)
+        entry = yt_dlp.YoutubeDL(params=params).extract_info(url, download=False)
+        if self.__needs_strict_extract_retry(entry):
+            strict_params = {
+                **params,
+                'extract_flat': False,
+                'ignore_no_formats_error': False,
+            }
+            return yt_dlp.YoutubeDL(params=strict_params).extract_info(url, download=False)
+        return entry
 
     def __calc_download_path(self, download_type, folder):
         base_directory = self.config.AUDIO_DOWNLOAD_DIR if download_type == 'audio' else self.config.DOWNLOAD_DIR

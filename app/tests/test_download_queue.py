@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import ytdl as ytdl_module
 from ytdl import DownloadQueue
 
 
@@ -351,6 +352,52 @@ async def test_extract_info_metube_extract_keys_win_over_preset(dq_env):
     assert result["status"] == "ok"
     assert captured_params[0]["extract_flat"] is True
     assert captured_params[0]["noplaylist"] is True
+
+
+@pytest.mark.asyncio
+async def test_add_retries_strict_extract_to_surface_geo_errors(dq_env):
+    """Flat extraction can mask YouTube geo/auth errors as generic no-format entries."""
+    captured_params: list = []
+
+    class FakeYoutubeDL:
+        def __init__(self, params=None):
+            captured_params.append(params)
+
+        def extract_info(self, url, download=False):
+            if len(captured_params) == 1:
+                return {
+                    "_type": "video",
+                    "id": "geo-blocked",
+                    "title": "Geo Blocked",
+                    "url": url,
+                    "webpage_url": url,
+                    "formats": [],
+                }
+            assert captured_params[-1]["extract_flat"] is False
+            assert captured_params[-1]["ignore_no_formats_error"] is False
+            raise ytdl_module.yt_dlp.utils.GeoRestrictedError(
+                "The uploader has not made this video available in your country",
+                countries=["CA"],
+            )
+
+    notifier = AsyncMock()
+    dq = DownloadQueue(dq_env, notifier)
+    with patch("ytdl.yt_dlp.YoutubeDL", FakeYoutubeDL):
+        result = await dq.add(
+            "https://www.youtube.com/watch?v=geo",
+            "video",
+            "auto",
+            "any",
+            "best",
+            "",
+            "",
+            0,
+            auto_start=False,
+        )
+
+    assert result["status"] == "error"
+    assert "not made this video available in your country" in result["msg"]
+    assert len(captured_params) == 2
 
 
 @pytest.mark.asyncio
