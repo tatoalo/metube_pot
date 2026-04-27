@@ -112,6 +112,19 @@ class ConfigTests(unittest.TestCase):
             c = Config()
         self.assertFalse(c.SC_USE_FFMPEG)
 
+    def test_jellyfin_sync_config_defaults_private(self):
+        with patch.dict(os.environ, _base_env(), clear=False):
+            c = Config()
+        self.assertFalse(c.JELLYFIN_SYNC_ENABLED)
+        self.assertEqual(c.JELLYFIN_URL, "")
+        self.assertEqual(c.JELLYFIN_API_KEY, "")
+        self.assertNotIn("JELLYFIN_API_KEY", c.frontend_safe())
+
+    def test_jellyfin_sync_enabled_boolean_loaded(self):
+        with patch.dict(os.environ, _base_env(JELLYFIN_SYNC_ENABLED="true"), clear=False):
+            c = Config()
+        self.assertTrue(c.JELLYFIN_SYNC_ENABLED)
+
     def test_runtime_override_roundtrip(self):
         with patch.dict(os.environ, _base_env(), clear=False):
             c = Config()

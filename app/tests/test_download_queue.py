@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,6 +33,13 @@ def dq_env():
         cfg.CREATE_CUSTOM_DIRS = True
         cfg.CLEAR_COMPLETED_AFTER = "0"
         cfg.DELETE_FILE_ON_TRASHCAN = False
+        cfg.JELLYFIN_SYNC_ENABLED = False
+        cfg.JELLYFIN_URL = ""
+        cfg.JELLYFIN_API_KEY = ""
+        cfg.JELLYFIN_LIBRARY_ID = ""
+        cfg.JELLYFIN_SYNC_TIMEOUT_SECONDS = "20"
+        cfg.JELLYFIN_METADATA_REFRESH_MODE = "Default"
+        cfg.JELLYFIN_IMAGE_REFRESH_MODE = "Default"
         cfg.OUTPUT_TEMPLATE = "%(title)s.%(ext)s"
         cfg.OUTPUT_TEMPLATE_CHAPTER = "%(title)s.%(ext)s"
         cfg.OUTPUT_TEMPLATE_PLAYLIST = ""
@@ -51,6 +60,13 @@ def test_get_returns_tuple_of_lists(dq_env):
     dq = DownloadQueue(dq_env, notifier)
     q, done = dq.get()
     assert q == [] and done == []
+
+
+async def _wait_for_mock_call(mock, attempts=20):
+    for _ in range(attempts):
+        if mock.called:
+            return
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -460,3 +476,54 @@ async def test_streamingcommunity_urls_use_custom_extractor_before_ytdlp(dq_env)
     assert result["status"] == "ok"
     queued = dq.pending.get(url)
     assert queued.info.entry["extractor"] == "streamingcommunity"
+
+
+@pytest.mark.asyncio
+async def test_finished_download_triggers_jellyfin_refresh(dq_env):
+    dq_env.JELLYFIN_SYNC_ENABLED = True
+    dq_env.JELLYFIN_URL = "http://jellyfin:8096"
+    dq_env.JELLYFIN_API_KEY = "secret"
+    dq_env.JELLYFIN_LIBRARY_ID = "library-id"
+    dq_env.JELLYFIN_SYNC_TIMEOUT_SECONDS = "7"
+    dq_env.JELLYFIN_METADATA_REFRESH_MODE = "FullRefresh"
+    dq_env.JELLYFIN_IMAGE_REFRESH_MODE = "Default"
+
+    notifier = AsyncMock()
+    dq = DownloadQueue(dq_env, notifier)
+    info = types.SimpleNamespace(status="finished", url="https://example.com/done", title="Done")
+    download = types.SimpleNamespace(info=info, canceled=False, tmpfilename=None, close=MagicMock())
+    dq.queue.put(download)
+
+    with patch("ytdl.refresh_jellyfin_library", return_value=204) as refresh:
+        dq._post_download_cleanup(download)
+        await _wait_for_mock_call(refresh)
+
+    refresh.assert_called_once_with(
+        base_url="http://jellyfin:8096",
+        api_key="secret",
+        library_id="library-id",
+        timeout=7.0,
+        metadata_refresh_mode="FullRefresh",
+        image_refresh_mode="Default",
+    )
+    notifier.completed.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_download_does_not_trigger_jellyfin_refresh(dq_env):
+    dq_env.JELLYFIN_SYNC_ENABLED = True
+    dq_env.JELLYFIN_URL = "http://jellyfin:8096"
+    dq_env.JELLYFIN_API_KEY = "secret"
+    dq_env.JELLYFIN_LIBRARY_ID = "library-id"
+
+    notifier = AsyncMock()
+    dq = DownloadQueue(dq_env, notifier)
+    info = types.SimpleNamespace(status="error", url="https://example.com/failed", title="Failed")
+    download = types.SimpleNamespace(info=info, canceled=False, tmpfilename=None, close=MagicMock())
+    dq.queue.put(download)
+
+    with patch("ytdl.refresh_jellyfin_library") as refresh:
+        dq._post_download_cleanup(download)
+        await asyncio.sleep(0.05)
+
+    refresh.assert_not_called()

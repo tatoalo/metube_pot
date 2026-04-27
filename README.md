@@ -52,6 +52,10 @@ Certain values can be set via environment variables, using the `-e` parameter on
 * __CLEAR_COMPLETED_AFTER__: Number of seconds after which completed (and failed) downloads are automatically removed from the "Completed" list. Defaults to `0` (disabled).
 * __SC_THREAD_COUNT__: Number of N_m3u8DL-RE threads used for StreamingCommunity downloads. Defaults to `16`.
 * __SC_USE_FFMPEG__: Use ffmpeg instead of N_m3u8DL-RE for StreamingCommunity downloads. Defaults to `false`.
+* __JELLYFIN_SYNC_ENABLED__: Trigger a Jellyfin library refresh after successful downloads. Defaults to `false`.
+* __JELLYFIN_URL__, __JELLYFIN_API_KEY__, __JELLYFIN_LIBRARY_ID__: Jellyfin server URL, API key, and library ID. Required when sync is enabled.
+* __JELLYFIN_SYNC_TIMEOUT_SECONDS__: Jellyfin refresh request timeout. Defaults to `20`.
+* __JELLYFIN_METADATA_REFRESH_MODE__, __JELLYFIN_IMAGE_REFRESH_MODE__: Jellyfin refresh modes. Defaults to `Default`.
 * __TELEGRAM_BOT_ENABLED__: Enable the Telegram bot integration. Defaults to `false`.
 * __TELEGRAM_STALL_TIMEOUT_SECONDS__: Seconds before the Telegram bot reports a stalled download. Defaults to `180`.
 * __TELEGRAM_HARD_TIMEOUT_SECONDS__: Seconds before the Telegram bot reports a long-running download timeout. Defaults to `7200`.
@@ -93,7 +97,7 @@ Certain values can be set via environment variables, using the `-e` parameter on
 * __HTTPS__: Use `https` instead of `http` (__CERTFILE__ and __KEYFILE__ required). Defaults to `false`.
 * __CERTFILE__: HTTPS certificate file path.
 * __KEYFILE__: HTTPS key file path.
-* __CORS_ALLOWED_ORIGINS__: Comma-separated list of origins permitted to make cross-origin requests to the MeTube API. When unset or empty, all cross-origin requests are denied. Set to `*` to allow all origins. This must be configured for [browser extensions](#-browser-extensions), [bookmarklets](#-bookmarklet), and any other browser-based tools that contact MeTube from a different origin. For browser extensions use `*` (see below); for bookmarklets you can list specific sites, e.g. `https://www.youtube.com,https://www.vimeo.com`.
+* __CORS_ALLOWED_ORIGINS__: Comma-separated origins allowed to call the MeTube API. Empty denies cross-origin requests; `*` allows all. Required for browser extensions/bookmarklets.
 * __ROBOTS_TXT__: A path to a `robots.txt` file mounted in the container.
 
 ### 🏠 Basic Setup
@@ -121,7 +125,7 @@ In JSON presets and overrides, setting an option to **`null`** clears that optio
 
 yt-dlp options in MeTube are expressed as JSON objects. The keys are yt-dlp API option names, which roughly correspond to command-line flags with dashes replaced by underscores. For example, the command-line flag `--write-subs` becomes `"writesubtitles": true` in JSON.
 
-> **Tip:** Some command-line flags don't have a direct single-key equivalent — for instance, `--embed-thumbnail` and `--recode-video` must be expressed via `"postprocessors"`. A full list of available API options can be found [in the yt-dlp source](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py#L224), and [this conversion script](https://github.com/yt-dlp/yt-dlp/blob/master/devscripts/cli_to_api.py) can help translate command-line flags to their API equivalents.
+> **Tip:** Some flags, such as `--embed-thumbnail`, must be expressed via `"postprocessors"`. See [yt-dlp options](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py#L224) and its CLI conversion script.
 
 ### Global options
 

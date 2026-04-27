@@ -22,6 +22,7 @@ from typing import Any, Optional
 import yt_dlp.networking.impersonate
 from yt_dlp.utils import STR_FORMAT_RE_TMPL, STR_FORMAT_TYPES
 from dl_formats import get_format, get_opts, AUDIO_FORMATS
+from jellyfin_sync import JellyfinSyncError, refresh_jellyfin_library
 from datetime import datetime
 from state_store import AtomicJsonStore, from_json_compatible, read_legacy_shelf, to_json_compatible
 from subscriptions import _entry_id
@@ -1193,6 +1194,8 @@ class DownloadQueue:
             else:
                 self.done.put(download)
                 asyncio.create_task(self.notifier.completed(download.info))
+                if download.info.status == 'finished':
+                    asyncio.create_task(self.__sync_jellyfin_library(download.info))
                 try:
                     clear_after = int(self.config.CLEAR_COMPLETED_AFTER)
                 except ValueError:
@@ -1207,6 +1210,54 @@ class DownloadQueue:
         if self.done.exists(url):
             log.debug(f'Auto-clearing completed download: {url}')
             await self.clear([url])
+
+    async def __sync_jellyfin_library(self, info):
+        if getattr(self.config, 'JELLYFIN_SYNC_ENABLED', False) is not True:
+            return
+
+        base_url = str(getattr(self.config, 'JELLYFIN_URL', '') or '').strip()
+        api_key = str(getattr(self.config, 'JELLYFIN_API_KEY', '') or '').strip()
+        library_id = str(getattr(self.config, 'JELLYFIN_LIBRARY_ID', '') or '').strip()
+        if not base_url or not api_key or not library_id:
+            log.warning(
+                'Jellyfin sync is enabled but JELLYFIN_URL, JELLYFIN_API_KEY, or '
+                'JELLYFIN_LIBRARY_ID is missing; skipping refresh for %s',
+                getattr(info, 'title', getattr(info, 'url', 'download')),
+            )
+            return
+
+        try:
+            timeout = float(getattr(self.config, 'JELLYFIN_SYNC_TIMEOUT_SECONDS', '20') or '20')
+        except (TypeError, ValueError):
+            log.warning('Invalid JELLYFIN_SYNC_TIMEOUT_SECONDS; using 20 seconds')
+            timeout = 20
+
+        metadata_refresh_mode = str(getattr(self.config, 'JELLYFIN_METADATA_REFRESH_MODE', 'Default') or 'Default')
+        image_refresh_mode = str(getattr(self.config, 'JELLYFIN_IMAGE_REFRESH_MODE', 'Default') or 'Default')
+        title = getattr(info, 'title', getattr(info, 'url', 'download'))
+
+        log.info('Triggering Jellyfin library refresh after completed download: %s', title)
+        try:
+            status = await asyncio.get_running_loop().run_in_executor(
+                None,
+                partial(
+                    refresh_jellyfin_library,
+                    base_url=base_url,
+                    api_key=api_key,
+                    library_id=library_id,
+                    timeout=timeout,
+                    metadata_refresh_mode=metadata_refresh_mode,
+                    image_refresh_mode=image_refresh_mode,
+                ),
+            )
+        except JellyfinSyncError as exc:
+            log.warning('Jellyfin library refresh failed for %s: %s', title, exc)
+            return
+        except Exception as exc:
+            log.exception('Unexpected Jellyfin library refresh error for %s: %s', title, exc)
+            return
+
+        log.info('Jellyfin library refresh requested for %s (HTTP %s)', title, status)
 
     def _build_ytdl_options(self, ytdl_options_presets=None, ytdl_options_overrides=None):
         """Merge global options, presets (in order), and per-download overrides."""
