@@ -88,6 +88,7 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
   ytdlOptionPresetNames: string[] = [];
   addInProgress = false;
   cancelRequested = false;
+  addErrorMessage = '';
   subscribeInProgress = false;
   checkIntervalMinutes = 60;
   cachedSubs: [string, SubscriptionRow][] = [];
@@ -992,10 +993,11 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
 
   addDownload(overrides: Partial<AddDownloadPayload> = {}) {
     const payload = this.buildAddPayload(overrides);
+    this.addErrorMessage = '';
 
     // Validate chapter template if chapter splitting is enabled
     if (payload.splitByChapters && !payload.chapterTemplate.includes('%(section_number)')) {
-      alert('Chapter template must include %(section_number)');
+      this.addErrorMessage = 'Chapter template must include %(section_number)';
       return;
     }
     if (!this.validateYtdlOptionsOverrides(payload.ytdlOptionsOverrides)) {
@@ -1008,12 +1010,18 @@ export class App implements AfterViewInit, OnInit, OnDestroy {
     this.addRequestSub?.unsubscribe();
     this.addRequestSub = this.downloads.add(payload).subscribe((status: Status) => {
       if (status.status === 'error' && !this.cancelRequested) {
-        alert(`Error adding URL: ${status.msg}`);
+        this.addErrorMessage = status.msg || 'Failed to add URL';
       } else if (status.status !== 'error') {
         this.addUrl = '';
       }
       this.resetAddState();
     });
+  }
+
+  clearAddError() {
+    if (this.addErrorMessage) {
+      this.addErrorMessage = '';
+    }
   }
 
   cancelAdding() {

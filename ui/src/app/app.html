@@ -137,6 +137,7 @@
               class="form-control form-control-lg"
               placeholder="Enter video, channel, or playlist URL"
               [(ngModel)]="addUrl"
+              (ngModelChange)="clearAddError()"
               [ngModelOptions]="{standalone: true}"
               [disabled]="addInProgress || subscribeInProgress || downloads.loading">
             <div class="btn-group w-100" role="group" aria-label="Download or subscribe">
@@ -152,10 +153,17 @@
               class="form-control form-control-lg"
               placeholder="Enter video, channel, or playlist URL"
               [(ngModel)]="addUrl"
+              (ngModelChange)="clearAddError()"
               [ngModelOptions]="{standalone: true}"
               [disabled]="addInProgress || subscribeInProgress || downloads.loading">
             <ng-container [ngTemplateOutlet]="urlBarActions" />
           </div>
+          @if (addErrorMessage) {
+            <div class="add-error alert alert-danger mt-3 mb-0" role="alert">
+              <div class="fw-semibold mb-1">Error adding URL</div>
+              <div>{{ addErrorMessage }}</div>
+            </div>
+          }
         </div>
       </div>
 
