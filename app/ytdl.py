@@ -763,6 +763,12 @@ class Download:
             self.status_queue.put({"status": "error", "msg": "Download finished but output file not found"})
             return 1
 
+        # Sort by natural (zero-padded) filename order, NOT mtime: with parallel
+        # downloads segment mtimes are non-monotonic and would scramble playback.
+        def _natural_key(path):
+            name = os.path.basename(path)
+            return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", name)]
+
         seg_files = sorted(
             [
                 os.path.join(dp, f)
@@ -770,17 +776,34 @@ class Download:
                 for f in fns
                 if f.endswith((".m4s", ".ts", ".mp4", ".m4a", ".aac"))
             ],
-            key=os.path.getmtime,
+            key=_natural_key,
         )
         if not seg_files:
             self.status_queue.put({"status": "error", "msg": "Download finished but no segments to mux"})
             return 1
         try:
-            concat_path = os.path.join(seg_dir, "_concat.txt")
-            with open(concat_path, "w", encoding="utf-8") as concat_file:
+            # IMPORTANT: do NOT use ffmpeg's concat demuxer (`-f concat`) here.
+            # It pads every segment to its container-reported duration (~8.064s
+            # for these audio-aligned ~8.0s TS segments), inserting a ~64ms A/V
+            # gap and dropping ~1 frame at every join. Across a full episode this
+            # accumulates into hundreds of stutters / apparent A/V desync.
+            # Binary-concatenating the raw TS segments and letting ffmpeg read the
+            # result as a single continuous stream preserves the source's
+            # continuous timestamps and produces a gapless file.
+            merged_ts = os.path.join(seg_dir, "_merged.ts")
+            with open(merged_ts, "wb") as out_f:
                 for segment_file in seg_files:
-                    concat_file.write(f"file '{segment_file}'\n")
-            ffmpeg_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_path, "-c", "copy", output_path]
+                    with open(segment_file, "rb") as in_f:
+                        shutil.copyfileobj(in_f, out_f, length=1024 * 1024)
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-i", merged_ts,
+                "-map", "0",
+                "-c", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart",
+                output_path,
+            ]
             ff_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=600)
             if ff_result.returncode == 0 and os.path.exists(output_path):
                 self.status_queue.put({"status": "finished", "filename": output_path})
@@ -1146,6 +1169,13 @@ class DownloadQueue:
         self.pending = PersistentQueue("pending", self.config.STATE_DIR + '/pending')
         self.active_downloads = set()
         self.semaphore = asyncio.Semaphore(int(self.config.MAX_CONCURRENT_DOWNLOADS))
+        # StreamingCommunity downloads each spawn N_m3u8DL-RE with SC_THREAD_COUNT
+        # worker threads. Running several at once saturates CPU/disk/network and
+        # makes N_m3u8DL-RE's mux step fail, which silently falls back to a lossy
+        # remux. Gate SC downloads with a dedicated, smaller semaphore (default 1).
+        self.sc_semaphore = asyncio.Semaphore(
+            max(1, int(self.config.SC_MAX_CONCURRENT_DOWNLOADS))
+        )
         self.done.load()
         self._add_generation = 0
         self._canceled_urls = set()  # URLs canceled during current playlist add
@@ -1167,10 +1197,26 @@ class DownloadQueue:
         asyncio.create_task(self.__import_queue())
         asyncio.create_task(self.__import_pending())
 
+    @staticmethod
+    def _is_streamingcommunity(download):
+        entry = getattr(download.info, "entry", None)
+        return bool(entry and "streamingcommunity" in str(entry.get("extractor", "")).lower())
+
     async def __start_download(self, download):
         if download.canceled:
             log.info(f"Download {download.info.title} was canceled, skipping start.")
             return
+        # Throttle StreamingCommunity downloads separately from the global pool.
+        # The SC semaphore is acquired OUTSIDE the global one so a waiting SC
+        # download does not hold a global slot while queued behind another SC
+        # download (which would block unrelated downloads).
+        if self._is_streamingcommunity(download):
+            async with self.sc_semaphore:
+                await self.__run_download(download)
+        else:
+            await self.__run_download(download)
+
+    async def __run_download(self, download):
         async with self.semaphore:
             if download.canceled:
                 log.info(f"Download {download.info.title} was canceled, skipping start.")

@@ -75,6 +75,7 @@ class Config:
         'ENABLE_ACCESSLOG': 'false',
         'SC_THREAD_COUNT': '16',
         'SC_USE_FFMPEG': 'false',
+        'SC_MAX_CONCURRENT_DOWNLOADS': '1',
         'JELLYFIN_SYNC_ENABLED': 'false',
         'JELLYFIN_URL': '',
         'JELLYFIN_API_KEY': '',
