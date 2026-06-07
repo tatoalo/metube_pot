@@ -12,6 +12,7 @@ Re-encoding audio to AAC regenerates timestamps from scratch, eliminating drift.
 
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -47,6 +48,28 @@ def has_video_stream(filepath: str) -> bool:
         return False
 
 
+def get_duration(filepath: str) -> float | None:
+    """Return container duration in seconds, or None if it can't be determined."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                filepath,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        probe = json.loads(result.stdout)
+        return float(probe.get("format", {}).get("duration"))
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, ValueError, Exception) as e:
+        log.warning(f"could not determine duration: {e}")
+        return None
+
+
 def fix_audio_sync(filepath: str) -> bool:
     """
     Re-encode audio to AAC while copying all other streams.
@@ -66,6 +89,14 @@ def fix_audio_sync(filepath: str) -> bool:
     if not has_video_stream(filepath):
         log.info(f"Skipping audio-only file: {filepath}")
         return True
+
+    # Scale the re-encode timeout to the media length
+    duration = get_duration(filepath)
+    if duration:
+        timeout = max(600, math.ceil(duration / 2))
+    else:
+        timeout = 1800
+    log.info(f"Using ffmpeg timeout of {timeout}s (duration={duration})")
 
     # Create temp file in the same directory to avoid cross-device moves
     dirpath = os.path.dirname(filepath)
@@ -87,7 +118,7 @@ def fix_audio_sync(filepath: str) -> bool:
         ]
 
         log.info(f"Re-encoding audio: {filepath}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
         if result.returncode != 0:
             log.error(f"ffmpeg failed (exit {result.returncode}): {result.stderr}")
