@@ -2,7 +2,7 @@ FROM node:lts-alpine AS builder
 
 WORKDIR /metube
 COPY ui ./
-RUN corepack enable && corepack prepare pnpm --activate
+RUN corepack enable
 RUN CI=true pnpm install && pnpm run build
 
 
