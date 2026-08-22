@@ -43,6 +43,7 @@ from ytdl import (
     _calculate_progress_percent,
     _compact_persisted_entry,
     _convert_srt_to_txt_file,
+    _parse_nm3u8_progress,
     _resolve_outtmpl_fields,
     _sanitize_entry_for_pickle,
     _sanitize_path_component,
@@ -454,6 +455,26 @@ class StreamingCommunityDownloadTests(unittest.TestCase):
             {"status": "downloading", "msg": "N_m3u8DL-RE failed, retrying with ffmpeg..."},
             dl.status_queue.items,
         )
+
+    def test_nm3u8_progress_uses_latest_repaint_frame(self):
+        raw_output = (
+            "video 0/100 0.00% 0 MB/0 MB 0 KBps 00:00:00"
+            "\x1b[2K\x1b[1A"
+            "video 325/2000 16.25% 512 MB/3.20 GB 8.50 MBps 00:01:15"
+        )
+
+        self.assertEqual(
+            _parse_nm3u8_progress(raw_output),
+            {
+                "downloaded_bytes": 512 * 1024 * 1024,
+                "total_bytes": int(3.20 * 1024 * 1024 * 1024),
+                "speed": int(8.50 * 1024 * 1024),
+                "eta": 75,
+            },
+        )
+
+    def test_nm3u8_progress_ignores_non_progress_output(self):
+        self.assertEqual(_parse_nm3u8_progress("17:30:24 Selected streams: video"), {})
 
 
 if __name__ == "__main__":
