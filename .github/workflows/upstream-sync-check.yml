@@ -339,7 +339,7 @@ jobs:
                   content: $prompt
                 }
               ],
-              max_tokens: 4000
+              max_completion_tokens: 16000
             }')
 
           # Retry logic
@@ -368,7 +368,9 @@ jobs:
 
               if [ -z "$ANALYSIS" ]; then
                 echo "Error: Empty response from API"
+                echo "Response: $RESPONSE_BODY"
                 SUCCESS=false
+                RETRY_COUNT=$((RETRY_COUNT + 1))
               else
                 echo "$ANALYSIS" > /tmp/analysis.md
               fi
