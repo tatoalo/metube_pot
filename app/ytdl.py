@@ -105,6 +105,70 @@ def _calculate_progress_percent(status: dict[str, Any], previous_percent: Option
     return percent
 
 
+_NM3U8_ANSI_RE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x1b\x07]*(?:\x07|\x1b\\))"
+)
+_NM3U8_SEGMENT_PROGRESS_RE = re.compile(r'(\d+)/(\d+)\s+([\d.]+)%')
+_NM3U8_SIZE_PROGRESS_RE = re.compile(
+    r'([\d.]+)\s*(KB|MB|GB)\s*/\s*([\d.]+)\s*(KB|MB|GB)'
+)
+_NM3U8_SPEED_RE = re.compile(r'([\d.]+)\s*(KB|MB|GB)ps')
+_NM3U8_ETA_RE = re.compile(r'(\d{2}):(\d{2}):(\d{2})(?=\s|$)')
+
+
+def _nm3u8_size_bytes(value: str, unit: str) -> int:
+    multiplier = {
+        "KB": 1024,
+        "MB": 1024 * 1024,
+        "GB": 1024 * 1024 * 1024,
+    }[unit]
+    return int(float(value) * multiplier)
+
+
+def _parse_nm3u8_progress(raw_output: str) -> dict[str, Any]:
+    """Extract the newest progress frame from N_m3u8DL-RE console output.
+
+    N_m3u8DL-RE uses Spectre.Console to repaint its progress display. When its
+    output is redirected to MeTube, multiple repaint frames can arrive in one
+    read, separated by ANSI cursor controls rather than ordinary newlines. The
+    oldest frame is commonly ``0/100 0.00%``. Always use the final match for
+    each field so that stale initial frames do not pin the web UI at zero.
+    """
+    output = _NM3U8_ANSI_RE.sub("", raw_output).replace("\r", "\n")
+    status: dict[str, Any] = {}
+
+    segment_matches = list(_NM3U8_SEGMENT_PROGRESS_RE.finditer(output))
+    if segment_matches:
+        match = segment_matches[-1]
+        status["downloaded_bytes"] = int(match.group(1))
+        status["total_bytes"] = int(match.group(2))
+
+    size_matches = list(_NM3U8_SIZE_PROGRESS_RE.finditer(output))
+    if size_matches:
+        match = size_matches[-1]
+        status["downloaded_bytes"] = _nm3u8_size_bytes(match.group(1), match.group(2))
+        status["total_bytes"] = _nm3u8_size_bytes(match.group(3), match.group(4))
+
+    if not status:
+        return {}
+
+    speed_matches = list(_NM3U8_SPEED_RE.finditer(output))
+    if speed_matches:
+        match = speed_matches[-1]
+        status["speed"] = _nm3u8_size_bytes(match.group(1), match.group(2))
+
+    eta_matches = list(_NM3U8_ETA_RE.finditer(output))
+    if eta_matches:
+        match = eta_matches[-1]
+        status["eta"] = (
+            int(match.group(1)) * 3600
+            + int(match.group(2)) * 60
+            + int(match.group(3))
+        )
+
+    return status
+
+
 # Regex matching yt-dlp output-template field references, e.g. ``%(title)s``
 # or ``%(playlist_index)03d``.  Built from yt-dlp's own ``STR_FORMAT_RE_TMPL``
 # so that it stays in sync with upstream changes to the template syntax.
@@ -678,22 +742,6 @@ class Download:
         if cookies:
             nm3u8_cmd.extend(["-H", f"Cookie: {cookies}"])
 
-        ansi_re = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r')
-        seg_pct_re = re.compile(r'(\d+)/(\d+)\s+([\d.]+)%')
-        size_re = re.compile(r'([\d.]+)\s*(KB|MB|GB)\s*/\s*([\d.]+)\s*(KB|MB|GB)')
-        speed_re = re.compile(r'([\d.]+)\s*(KB|MB|GB)ps')
-        eta_re = re.compile(r'(\d{2}):(\d{2}):(\d{2})\s*$')
-
-        def _parse_size_bytes(value, unit):
-            value = float(value)
-            if unit == "KB":
-                return value * 1024
-            if unit == "MB":
-                return value * 1024 * 1024
-            if unit == "GB":
-                return value * 1024 * 1024 * 1024
-            return value
-
         output_lines = []
         try:
             process = subprocess.Popen(
@@ -710,31 +758,16 @@ class Download:
 
         last_update = time.time()
         for raw_line in process.stdout:
-            line = ansi_re.sub("", raw_line).strip()
+            line = _NM3U8_ANSI_RE.sub("", raw_line).strip()
             if line:
                 output_lines.append(line)
                 output_lines = output_lines[-30:]
             if not line or time.time() - last_update < 0.5:
                 continue
-            last_update = time.time()
-            status_update = {"status": "downloading"}
-
-            match = seg_pct_re.search(line)
-            if match:
-                status_update["downloaded_bytes"] = int(match.group(1))
-                status_update["total_bytes"] = int(match.group(2))
-            match = size_re.search(line)
-            if match:
-                status_update["downloaded_bytes"] = int(_parse_size_bytes(match.group(1), match.group(2)))
-                status_update["total_bytes"] = int(_parse_size_bytes(match.group(3), match.group(4)))
-            match = speed_re.search(line)
-            if match:
-                status_update["speed"] = _parse_size_bytes(match.group(1), match.group(2))
-            match = eta_re.search(line)
-            if match:
-                status_update["eta"] = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + int(match.group(3))
-            if len(status_update) > 1:
-                self.status_queue.put(status_update)
+            progress = _parse_nm3u8_progress(raw_line)
+            if progress:
+                last_update = time.time()
+                self.status_queue.put({"status": "downloading", **progress})
 
         process.wait()
         if process.returncode != 0:
