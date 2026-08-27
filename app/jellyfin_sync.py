@@ -45,7 +45,7 @@ def refresh_jellyfin_library(
         method="POST",
         headers={
             "Accept": "application/json",
-            "X-Emby-Token": api_key,
+            "Authorization": f'MediaBrowser Token="{api_key}"',
         },
     )
 
