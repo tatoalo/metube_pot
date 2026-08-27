@@ -23,10 +23,16 @@ from yt_dlp.version import __version__ as yt_dlp_version
 
 log = logging.getLogger('main')
 
+NOISY_THIRD_PARTY_LOGGERS = ('httpx', 'httpcore', 'telegram', 'watchfiles', 'asyncio')
+
 def parseLogLevel(logLevel):
     if not isinstance(logLevel, str):
         return None
     return getattr(logging, logLevel.upper(), None)
+
+def dampenThirdPartyLoggers():
+    for name in NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 # Configure logging before Config() uses it so early messages are not dropped.
 # Only configure if no handlers are set (avoid clobbering hosting app settings).
@@ -226,6 +232,7 @@ config = Config()
 # This re-applies the log level after Config loads, in case LOGLEVEL was
 # overridden by config file settings or differs from the environment variable.
 logging.getLogger().setLevel(parseLogLevel(str(config.LOGLEVEL)) or logging.INFO)
+dampenThirdPartyLoggers()
 
 class ObjectSerializer(json.JSONEncoder):
     def default(self, obj):
@@ -1040,6 +1047,7 @@ def isAccessLogEnabled():
 
 if __name__ == '__main__':
     logging.getLogger().setLevel(parseLogLevel(config.LOGLEVEL) or logging.INFO)
+    dampenThirdPartyLoggers()
     log.info(f"Listening on {config.HOST}:{config.PORT}")
 
 
