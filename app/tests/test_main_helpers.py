@@ -69,6 +69,23 @@ class ParseLogLevelTests(unittest.TestCase):
         self.assertIsNone(main.parseLogLevel(123))
 
 
+class DampenThirdPartyLoggersTests(unittest.TestCase):
+    def test_sets_noisy_dependency_loggers_to_warning(self):
+        loggers = [logging.getLogger(name) for name in main.NOISY_THIRD_PARTY_LOGGERS]
+        previous_levels = [logger.level for logger in loggers]
+        try:
+            for logger in loggers:
+                logger.setLevel(logging.DEBUG)
+
+            main.dampenThirdPartyLoggers()
+
+            for logger in loggers:
+                self.assertEqual(logger.level, logging.WARNING)
+        finally:
+            for logger, level in zip(loggers, previous_levels, strict=True):
+                logger.setLevel(level)
+
+
 class ObjectSerializerTests(unittest.TestCase):
     def test_dict_like_object(self):
         class Obj:
