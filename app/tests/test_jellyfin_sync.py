@@ -29,5 +29,5 @@ def test_refresh_jellyfin_library_posts_refresh_request():
         "ReplaceAllMetadata=false&ReplaceAllImages=false"
     )
     assert request.get_method() == "POST"
-    assert request.get_header("X-emby-token") == "secret"
+    assert request.get_header("Authorization") == 'MediaBrowser Token="secret"'
     assert urlopen.call_args.kwargs["timeout"] == 12
