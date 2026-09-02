@@ -1296,11 +1296,10 @@ class DownloadQueue:
 
         base_url = str(getattr(self.config, 'JELLYFIN_URL', '') or '').strip()
         api_key = str(getattr(self.config, 'JELLYFIN_API_KEY', '') or '').strip()
-        library_id = str(getattr(self.config, 'JELLYFIN_LIBRARY_ID', '') or '').strip()
-        if not base_url or not api_key or not library_id:
+        if not base_url or not api_key:
             log.warning(
-                'Jellyfin sync is enabled but JELLYFIN_URL, JELLYFIN_API_KEY, or '
-                'JELLYFIN_LIBRARY_ID is missing; skipping refresh for %s',
+                'Jellyfin sync is enabled but JELLYFIN_URL or JELLYFIN_API_KEY '
+                'is missing; skipping refresh for %s',
                 getattr(info, 'title', getattr(info, 'url', 'download')),
             )
             return
@@ -1311,8 +1310,6 @@ class DownloadQueue:
             log.warning('Invalid JELLYFIN_SYNC_TIMEOUT_SECONDS; using 20 seconds')
             timeout = 20
 
-        metadata_refresh_mode = str(getattr(self.config, 'JELLYFIN_METADATA_REFRESH_MODE', 'Default') or 'Default')
-        image_refresh_mode = str(getattr(self.config, 'JELLYFIN_IMAGE_REFRESH_MODE', 'Default') or 'Default')
         title = getattr(info, 'title', getattr(info, 'url', 'download'))
 
         log.info('Triggering Jellyfin library refresh after completed download: %s', title)
@@ -1323,10 +1320,7 @@ class DownloadQueue:
                     refresh_jellyfin_library,
                     base_url=base_url,
                     api_key=api_key,
-                    library_id=library_id,
                     timeout=timeout,
-                    metadata_refresh_mode=metadata_refresh_mode,
-                    image_refresh_mode=image_refresh_mode,
                 ),
             )
         except JellyfinSyncError as exc:

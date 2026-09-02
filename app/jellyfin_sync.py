@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import urllib.parse
 import urllib.request
 
 
@@ -15,33 +14,17 @@ def refresh_jellyfin_library(
     *,
     base_url: str,
     api_key: str,
-    library_id: str,
     timeout: float,
-    metadata_refresh_mode: str = "Default",
-    image_refresh_mode: str = "Default",
 ) -> int:
-    """Trigger a Jellyfin recursive library refresh and return the HTTP status."""
+    """Trigger a Jellyfin media library scan and return the HTTP status."""
     base_url = base_url.rstrip("/")
     if not base_url:
         raise JellyfinSyncError("JELLYFIN_URL is required")
     if not api_key:
         raise JellyfinSyncError("JELLYFIN_API_KEY is required")
-    if not library_id:
-        raise JellyfinSyncError("JELLYFIN_LIBRARY_ID is required")
 
-    query = urllib.parse.urlencode(
-        {
-            "Recursive": "true",
-            "MetadataRefreshMode": metadata_refresh_mode or "Default",
-            "ImageRefreshMode": image_refresh_mode or "Default",
-            "ReplaceAllMetadata": "false",
-            "ReplaceAllImages": "false",
-        }
-    )
-    quoted_library_id = urllib.parse.quote(library_id, safe="")
-    url = f"{base_url}/Items/{quoted_library_id}/Refresh?{query}"
     request = urllib.request.Request(
-        url,
+        f"{base_url}/Library/Refresh",
         method="POST",
         headers={
             "Accept": "application/json",

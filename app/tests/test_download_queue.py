@@ -36,10 +36,7 @@ def dq_env():
         cfg.JELLYFIN_SYNC_ENABLED = False
         cfg.JELLYFIN_URL = ""
         cfg.JELLYFIN_API_KEY = ""
-        cfg.JELLYFIN_LIBRARY_ID = ""
         cfg.JELLYFIN_SYNC_TIMEOUT_SECONDS = "20"
-        cfg.JELLYFIN_METADATA_REFRESH_MODE = "Default"
-        cfg.JELLYFIN_IMAGE_REFRESH_MODE = "Default"
         cfg.OUTPUT_TEMPLATE = "%(title)s.%(ext)s"
         cfg.OUTPUT_TEMPLATE_CHAPTER = "%(title)s.%(ext)s"
         cfg.OUTPUT_TEMPLATE_PLAYLIST = ""
@@ -483,10 +480,7 @@ async def test_finished_download_triggers_jellyfin_refresh(dq_env):
     dq_env.JELLYFIN_SYNC_ENABLED = True
     dq_env.JELLYFIN_URL = "http://jellyfin:8096"
     dq_env.JELLYFIN_API_KEY = "secret"
-    dq_env.JELLYFIN_LIBRARY_ID = "library-id"
     dq_env.JELLYFIN_SYNC_TIMEOUT_SECONDS = "7"
-    dq_env.JELLYFIN_METADATA_REFRESH_MODE = "FullRefresh"
-    dq_env.JELLYFIN_IMAGE_REFRESH_MODE = "Default"
 
     notifier = AsyncMock()
     dq = DownloadQueue(dq_env, notifier)
@@ -501,10 +495,7 @@ async def test_finished_download_triggers_jellyfin_refresh(dq_env):
     refresh.assert_called_once_with(
         base_url="http://jellyfin:8096",
         api_key="secret",
-        library_id="library-id",
         timeout=7.0,
-        metadata_refresh_mode="FullRefresh",
-        image_refresh_mode="Default",
     )
     notifier.completed.assert_awaited()
 
@@ -514,7 +505,6 @@ async def test_failed_download_does_not_trigger_jellyfin_refresh(dq_env):
     dq_env.JELLYFIN_SYNC_ENABLED = True
     dq_env.JELLYFIN_URL = "http://jellyfin:8096"
     dq_env.JELLYFIN_API_KEY = "secret"
-    dq_env.JELLYFIN_LIBRARY_ID = "library-id"
 
     notifier = AsyncMock()
     dq = DownloadQueue(dq_env, notifier)
