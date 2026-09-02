@@ -15,19 +15,13 @@ def test_refresh_jellyfin_library_posts_refresh_request():
         status = refresh_jellyfin_library(
             base_url="http://jellyfin:8096/",
             api_key="secret",
-            library_id="library id",
             timeout=12,
-            metadata_refresh_mode="FullRefresh",
-            image_refresh_mode="Default",
         )
 
     assert status == 204
     request = urlopen.call_args.args[0]
-    assert request.full_url == (
-        "http://jellyfin:8096/Items/library%20id/Refresh?"
-        "Recursive=true&MetadataRefreshMode=FullRefresh&ImageRefreshMode=Default&"
-        "ReplaceAllMetadata=false&ReplaceAllImages=false"
-    )
+    assert request.full_url == "http://jellyfin:8096/Library/Refresh"
     assert request.get_method() == "POST"
+    assert request.data is None
     assert request.get_header("Authorization") == 'MediaBrowser Token="secret"'
     assert urlopen.call_args.kwargs["timeout"] == 12

@@ -53,9 +53,8 @@ Certain values can be set via environment variables, using the `-e` parameter on
 * __SC_THREAD_COUNT__: Number of N_m3u8DL-RE threads used for StreamingCommunity downloads. Defaults to `16`.
 * __SC_USE_FFMPEG__: Use ffmpeg instead of N_m3u8DL-RE for StreamingCommunity downloads. Defaults to `false`.
 * __JELLYFIN_SYNC_ENABLED__: Trigger a Jellyfin library refresh after successful downloads. Defaults to `false`.
-* __JELLYFIN_URL__, __JELLYFIN_API_KEY__, __JELLYFIN_LIBRARY_ID__: Jellyfin server URL, API key, and library ID. Required when sync is enabled.
+* __JELLYFIN_URL__, __JELLYFIN_API_KEY__: Jellyfin server URL and API key. Required when sync is enabled.
 * __JELLYFIN_SYNC_TIMEOUT_SECONDS__: Jellyfin refresh request timeout. Defaults to `20`.
-* __JELLYFIN_METADATA_REFRESH_MODE__, __JELLYFIN_IMAGE_REFRESH_MODE__: Jellyfin refresh modes. Defaults to `Default`.
 * __TELEGRAM_BOT_ENABLED__: Enable the Telegram bot integration. Defaults to `false`.
 * __TELEGRAM_STALL_TIMEOUT_SECONDS__: Seconds before the Telegram bot reports a stalled download. Defaults to `180`.
 * __TELEGRAM_HARD_TIMEOUT_SECONDS__: Seconds before the Telegram bot reports a long-running download timeout. Defaults to `7200`.
