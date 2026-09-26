@@ -3,6 +3,9 @@
 ![Build Status](https://github.com/tatoalo/metube_pot/actions/workflows/main.yml/badge.svg)
 ![Docker Pulls](https://img.shields.io/docker/pulls/tatoalo/metube_pot.svg)
 
+> [!IMPORTANT]
+> **This fork is on hold.** Active development has moved to [**Aulos**](https://github.com/tatoalo/aulos), a faster, leaner rewrite of the backend as a native Rust download server. Aulos is a drop-in replacement: same env vars, volumes and v1 HTTP routes, plus a one-shot importer for existing state, so a compose deployment can switch images and keep its history. It also adds a resumable v2 REST + WebSocket API. This repo will only get occasional yt-dlp bumps, if any; new features and fixes land in Aulos.
+
 This is a fork of [MeTube](https://github.com/alexta69/metube) with YouTube PO Token support, StreamingCommunity support, Telegram bot integration, Jellyfin NFO generation, and SponsorBlock remux audio-sync handling.
 
 MeTube is a self-hosted web UI for `yt-dlp`.
@@ -43,13 +46,13 @@ Certain values can be set via environment variables, using the `-e` parameter on
 
 ### ⬇️ Download Behavior
 
-* __MAX_CONCURRENT_DOWNLOADS__: Maximum number of simultaneous downloads allowed. For example, if set to `5`, then at most five downloads will run concurrently, and any additional downloads will wait until one of the active downloads completes. Defaults to `3`.
+* __MAX_CONCURRENT_DOWNLOADS__: Maximum number of simultaneous downloads; extra downloads wait in the queue. Defaults to `3`.
 * __DELETE_FILE_ON_TRASHCAN__: if `true`, downloaded files are deleted on the server, when they are trashed from the "Completed" section of the UI. Defaults to `false`.
 * __DEFAULT_OPTION_PLAYLIST_ITEM_LIMIT__: Maximum number of playlist items that can be downloaded. Defaults to `0` (no limit).
 * __SUBSCRIPTION_DEFAULT_CHECK_INTERVAL__: Default minutes between automatic checks for each subscription. Defaults to `60`.
 * __SUBSCRIPTION_SCAN_PLAYLIST_END__: Maximum playlist/channel entries to fetch per subscription check (newest-first). Defaults to `50`.
 * __SUBSCRIPTION_MAX_SEEN_IDS__: Cap on stored video IDs per subscription to limit state file growth. Defaults to `50000`.
-* __CLEAR_COMPLETED_AFTER__: Number of seconds after which completed (and failed) downloads are automatically removed from the "Completed" list. Defaults to `0` (disabled).
+* __CLEAR_COMPLETED_AFTER__: Seconds after which completed/failed downloads are auto-removed from the "Completed" list. Defaults to `0` (disabled).
 * __SC_THREAD_COUNT__: Number of N_m3u8DL-RE threads used for StreamingCommunity downloads. Defaults to `16`.
 * __SC_USE_FFMPEG__: Use ffmpeg instead of N_m3u8DL-RE for StreamingCommunity downloads. Defaults to `false`.
 * __JELLYFIN_SYNC_ENABLED__: Trigger a Jellyfin library refresh after successful downloads. Defaults to `false`.
@@ -254,13 +257,13 @@ __Firefox:__ contributed by [nanocortex](https://github.com/nanocortex). You can
 
 ## 📱 iOS Shortcut
 
-[rithask](https://github.com/rithask) created an iOS shortcut to send URLs to MeTube from Safari. Enter the MeTube instance address when prompted which will be saved for later use. You can run the shortcut from Safari’s share menu. The shortcut can be downloaded from [this iCloud link](https://www.icloud.com/shortcuts/66627a9f334c467baabdb2769763a1a6).
+[rithask](https://github.com/rithask) created an iOS shortcut to send URLs to MeTube from Safari's share menu (it asks for your instance address once). Get it from [this iCloud link](https://www.icloud.com/shortcuts/66627a9f334c467baabdb2769763a1a6).
 
 ## 🔖 Bookmarklet
 
 [kushfest](https://github.com/kushfest) has created a Chrome bookmarklet for sending the currently open webpage to MeTube. Please note that if you're on an HTTPS page, your MeTube instance must be configured with `HTTPS` as `true` in the environment, or be behind an HTTPS reverse proxy (see below) for the bookmarklet to work.
 
-Since bookmarklets run in the context of the current page (e.g. youtube.com), the requests they make to MeTube are cross-origin. You must add the origins of sites where you use the bookmarklet to the __CORS_ALLOWED_ORIGINS__ environment variable, otherwise the browser will block the requests. For example, to use the bookmarklet on YouTube and Vimeo: `CORS_ALLOWED_ORIGINS=https://www.youtube.com,https://www.vimeo.com`.
+Bookmarklet requests are cross-origin, so add the sites where you use it to __CORS_ALLOWED_ORIGINS__ or the browser will block them. For example, to use the bookmarklet on YouTube and Vimeo: `CORS_ALLOWED_ORIGINS=https://www.youtube.com,https://www.vimeo.com`.
 
 GitHub doesn't allow embedding JavaScript as a link, so the bookmarklet has to be created manually by copying the following code to a new bookmark you create on your bookmarks bar. Change the hostname in the URL below to point to your MeTube instance.
 
