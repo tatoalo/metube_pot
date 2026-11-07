@@ -67,7 +67,7 @@ RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
     rm /tmp/n_m3u8dl.tar.gz
 
 # Keep the fork's nightly yt-dlp cadence for YouTube/POT breakage fixes.
-RUN pip install --break-system-packages --no-deps yt-dlp==2026.10.29.232701dev
+RUN pip install --break-system-packages --no-deps yt-dlp==2026.11.04.232659dev
 
 COPY app ./app
 COPY --from=builder /metube/dist/metube ./ui/dist/metube
